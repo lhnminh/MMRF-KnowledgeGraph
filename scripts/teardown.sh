@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tear down the Workstream 1 knowledge graph stack (AD-005: Neptune and the notebook bill
-# while idle, so teardown is scripted). Does not touch the sandbox (Workstream 2) stack.
+# Tear down the Workstream 1 knowledge graph stack. Neptune bills while idle, so teardown
+# is scripted. Does not touch the sandbox (Workstream 2) stack.
 #
 # Usage:  scripts/teardown.sh                 # shows the destroy plan and asks "yes"
 #         scripts/teardown.sh -auto-approve   # no prompt
@@ -63,8 +63,6 @@ check() {  # check <label> <command...>: the command succeeding means the resour
 }
 check "Neptune cluster $NAME-cluster" \
   aws neptune describe-db-clusters --region "$REGION" --db-cluster-identifier "$NAME-cluster"
-check "SageMaker notebook $NAME-workbench" \
-  aws sagemaker describe-notebook-instance --region "$REGION" --notebook-instance-name "$NAME-workbench"
 check "Lambda $NAME-kg-graph" \
   aws lambda get-function --region "$REGION" --function-name "$NAME-kg-graph"
 

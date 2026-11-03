@@ -67,7 +67,7 @@ resource "aws_lambda_function" "loader" {
     variables = {
       NEPTUNE_URI = "bolt://${aws_neptune_cluster.this.endpoint}:8182"
       # Sign connections now; set iam_database_authentication_enabled on the cluster later,
-      # once this is confirmed working and ingest no longer depends on the notebook.
+      # once this is confirmed working.
       NEPTUNE_IAM_AUTH = "true"
     }
   }
