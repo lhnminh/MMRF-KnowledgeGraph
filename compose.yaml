@@ -1,0 +1,33 @@
+services:
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/password
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+
+  loader:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.12-slim
+        WORKDIR /app
+        COPY requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY ingestion ingestion
+        COPY data data
+    environment:
+      NEO4J_URI: bolt://neo4j:7687
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - neo4j
+    profiles: ["tools"]
+    command: ["python3", "ingestion/load_neo4j.py"]
+
+volumes:
+  neo4j_data:
