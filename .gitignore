@@ -22,3 +22,6 @@ deploy/orion.rendered.yaml
 terraform/terraform.tfvars
 terraform/neptune-only/terraform.tfvars
 .tools/
+terraform/tfplan*
+terraform/lambda_build/*
+!terraform/lambda_build/handler.py
