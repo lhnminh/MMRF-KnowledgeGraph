@@ -1,7 +1,7 @@
 [project]
 name = "mmrf-knowledgegraph"
 version = "0.1.0"
-description = "ORION: evidence-linked Multiple Myeloma research prototype"
+description = "Evidence-linked Multiple Myeloma knowledge graph"
 readme = "README.md"
 authors = [
     { name = "Minh Le", email = "lehnminh@gmail.com" }
@@ -12,16 +12,10 @@ dependencies = [
     "requests>=2,<3",
     "pyyaml>=6,<7",
     "boto3>=1.40,<2",
-    "fastapi>=0.115,<1",
-    "uvicorn>=0.34,<1",
-    "pydantic>=2.10,<3",
 ]
 
 [dependency-groups]
-dev = ["pytest>=8,<10", "httpx>=0.28,<1", "ruff>=0.11,<1"]
-
-[project.scripts]
-mmrf-knowledgegraph = "mmrf_knowledgegraph:main"
+dev = ["pytest>=8,<10", "ruff>=0.11,<1"]
 
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14.0"]

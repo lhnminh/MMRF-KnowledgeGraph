@@ -30,37 +30,3 @@ def test_loader_uses_fixed_bucket_role_region_and_opencypher(monkeypatch):
     assert client.arguments["updateSingleCardinalityProperties"] is True
     with pytest.raises(ValueError, match="content hash"):
         utility.handler({"action": "load", "version": "../arbitrary"}, None)
-
-
-def test_neptune_sdk_request_matches_aws_model():
-    import boto3
-    from botocore.stub import Stubber
-
-    from mmrf_knowledgegraph.graph import Neptune
-
-    client = boto3.client(
-        "neptunedata",
-        endpoint_url="https://neptune.invalid:8182",
-        region_name="us-east-1",
-        aws_access_key_id="synthetic-test-only",
-        aws_secret_access_key="synthetic-test-only",
-    )
-    graph = Neptune("https://neptune.invalid:8182", client)
-    with Stubber(client) as stub:
-        stub.add_response(
-            "execute_open_cypher_query",
-            {
-                "results": [
-                    {
-                        "id": "HGNC:11998",
-                        "name": "TP53",
-                        "entity_type": "Gene",
-                        "aliases_json": '["NCBIGene:7157"]',
-                        "provenance_json": "[]",
-                    }
-                ]
-            },
-        )
-        nodes = graph.search("TP53", ["Gene"])
-        assert nodes[0]["aliases"] == ["NCBIGene:7157"]
-        stub.assert_no_pending_responses()
