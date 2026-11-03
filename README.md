@@ -111,13 +111,27 @@ Trimming happens at load time; the files in `data/raw/` are never changed.
 
 - **Open Targets associated targets: all kept** (the 53 from the fetch, which
   already keeps only the top 50 by association score, plus ties).
-- **Open Targets drugs: only those whose highest clinical stage *for myeloma*
-  is `APPROVAL` or `PHASE_3`** (102 of 553 in release 26.09). These are the
-  drugs with substantial myeloma-specific clinical evidence. `PHASE_2_3` and
-  earlier are dropped. The filter uses the myeloma stage
-  (`CANDIDATE_FOR.clinical_stage`), not the drug's overall stage
-  (`Drug.max_stage`), so a drug approved for another disease but only in
-  early myeloma trials is dropped.
+- **Open Targets drugs: 128 of 553 kept (release 26.09).** A drug is kept if
+  either rule matches:
+  1. **Stage rule (108 drugs):** its highest clinical stage *for myeloma*
+     is `APPROVAL`, `PHASE_3` or `PHASE_2_3`. "Phase 2/3" counts as Phase 3
+     or later. These drugs have substantial myeloma-specific clinical
+     evidence. The rule uses the myeloma stage (`CANDIDATE_FOR.clinical_stage`),
+     not the drug's overall stage (`Drug.max_stage`).
+  2. **Gene rule (20 more drugs, at any stage):** one of its
+     mechanism-of-action targets is a gene with CIViC myeloma evidence, or one
+     of the Virtual Lab panel genes (KRAS, NRAS, TP53, BRAF, DIS3, MYC).
+     Without this rule, CIViC's variant evidence (e.g. BRAF V600E) and the
+     Virtual Lab genes would lose their link to drugs acting on those genes.
+     The CIViC gene list is read from `data/raw/civic_mm.json`, even with
+     `--sources opentargets`, so the Open Targets result doesn't depend on
+     which sources are loaded together.
+
+  Each kept drug's `CANDIDATE_FOR` edge records `kept_reason`
+  (`clinical_stage` or `relevance_gene`) and `relevance_genes` (the CIViC or
+  panel genes it targets). In release 26.09 no myeloma drug targets KRAS,
+  NRAS, MYC or DIS3, so for those genes the rule adds nothing; that is "none
+  recorded" in Open Targets, not a trimming loss.
 - **TARGETS edges of kept drugs: all kept**, even when the gene isn't an
   associated target. A drug's mechanism is part of why it is relevant.
   Genes reached only through dropped drugs are not loaded.
@@ -127,7 +141,8 @@ Trimming happens at load time; the files in `data/raw/` are never changed.
 
 Each Open Targets / CIViC load writes one `(:Dataset {source_dataset})` node
 per source. It records `load_mode` (`trimmed`/`full`), `trim_rules` (the
-rules above, in words), kept-vs-in-file counts, source version, license,
+rules above, in words), the stages and genes used, kept-vs-in-file counts
+(including how many drugs each rule kept), source version, license,
 fetch time, raw-file sha256 and `loaded_at_utc`. Anyone querying the graph can
 see what was filtered:
 

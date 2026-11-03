@@ -18,10 +18,12 @@ Usage:
   --full                        skip relevance trimming
   --neptune                     target Neptune (or set NEPTUNE_MODE=1)
 
-Relevance trimming (default): Open Targets drugs are limited to those at APPROVAL or
-PHASE_3 for myeloma; all associated targets, every TARGETS edge of a kept drug and all
-CIViC evidence are kept. Raw files are not modified. Each Open Targets/CIViC load
-writes a (:Dataset {source_dataset}) node recording load_mode and trim_rules.
+Relevance trimming (default): an Open Targets drug is kept if its myeloma stage is
+APPROVAL, PHASE_3 or PHASE_2_3, or if it targets a gene with CIViC evidence or a
+Virtual Lab panel gene (KRAS, NRAS, TP53, BRAF, DIS3, MYC). All associated targets,
+every TARGETS edge of a kept drug and all CIViC evidence are kept. Raw files are not
+modified. Each Open Targets/CIViC load writes a (:Dataset {source_dataset}) node
+recording load_mode and trim_rules; CANDIDATE_FOR.kept_reason says why a drug was kept.
 
 Neptune compatibility (openCypher over Bolt):
   - Neptune cannot store list-valued properties. Every list is stored as a
@@ -57,11 +59,17 @@ ALL_SOURCES = ("monarch", "dismech", OT, CIVIC)
 RECORDED = "recorded"
 
 # Relevance trimming (default; --full disables it). Raw files are never changed.
-KEPT_DRUG_STAGES = ("APPROVAL", "PHASE_3")  # Open Targets maxClinicalStage for myeloma
+# Open Targets maxClinicalStage for myeloma that counts as "Phase 3 or later".
+KEPT_DRUG_STAGES = ("APPROVAL", "PHASE_3", "PHASE_2_3")
+# Virtual Lab sandbox panel genes (matched by HGNC symbol; see AD-004 on DIS3's Ensembl ID).
+PANEL_GENES = ("KRAS", "NRAS", "TP53", "BRAF", "DIS3", "MYC")
 OT_TRIM_RULES = (
     "Associated targets: all top targets from the fetch kept. "
-    "Drugs: only candidates whose maximum clinical stage for multiple myeloma "
-    "(CANDIDATE_FOR.clinical_stage) is APPROVAL or PHASE_3; PHASE_2_3 and earlier dropped. "
+    "Drugs: a candidate is kept if (a) its maximum clinical stage for multiple myeloma "
+    "(CANDIDATE_FOR.clinical_stage) is APPROVAL, PHASE_3 or PHASE_2_3, or (b) at any stage, "
+    "one of its mechanism-of-action targets is a gene with CIViC myeloma evidence or a "
+    "Virtual Lab panel gene (KRAS, NRAS, TP53, BRAF, DIS3, MYC). All other drugs dropped. "
+    "CANDIDATE_FOR.kept_reason says which rule kept each drug. "
     "TARGETS: every mechanism-of-action edge of a kept drug kept, including genes "
     "that are not associated targets."
 )
@@ -176,7 +184,20 @@ def _prov(source: str, version: str) -> dict:
     return {"source_dataset": source, "source_version": version, "edge_origin": RECORDED}
 
 
-def build_opentargets(ot: dict, full: bool = False) -> dict:
+def _moa_symbols(drug: dict) -> set[str]:
+    return {
+        t["hgnc_symbol"]
+        for moa in (drug.get("mechanismsOfAction") or {}).get("rows") or []
+        for t in moa.get("targets") or []
+        if t.get("hgnc_symbol")
+    }
+
+
+def build_opentargets(ot: dict, full: bool = False, civic_genes: set[str] | None = None) -> dict:
+    """civic_genes: HGNC symbols with CIViC myeloma evidence (needed when trimming)."""
+    if not full and civic_genes is None:
+        raise ValueError("trimmed Open Targets load needs the CIViC gene list")
+    relevance_genes = set(PANEL_GENES) | (civic_genes or set())
     version = ot["data_version"]
     disease_id = ot["disease"]["graph_disease_id"]
     prov = _prov(OT, version)
@@ -200,10 +221,19 @@ def build_opentargets(ot: dict, full: bool = False) -> dict:
 
     drug_rows, candidate_rows, targets = [], [], {}
     all_candidates = ot["drug_and_clinical_candidates"]
+    kept_by = Counter()
     for c in all_candidates:
-        if not full and c.get("maxClinicalStage") not in KEPT_DRUG_STAGES:
-            continue  # dropping the drug also drops its TARGETS edges and drug-only genes
         drug = c["drug"]
+        matched = sorted(_moa_symbols(drug) & relevance_genes)
+        if full:
+            kept_reason = None
+        elif c.get("maxClinicalStage") in KEPT_DRUG_STAGES:
+            kept_reason = "clinical_stage"
+        elif matched:
+            kept_reason = "relevance_gene"
+        else:
+            continue  # dropping the drug also drops its TARGETS edges and drug-only genes
+        kept_by[kept_reason] += 1
         reports = c.get("clinicalReports") or []
         drug_rows.append({
             "chembl_id": drug["id"],
@@ -217,6 +247,8 @@ def build_opentargets(ot: dict, full: bool = False) -> dict:
             "candidate_id": c.get("id"),
             "clinical_report_ids": join_list(r.get("id") for r in reports),
             "clinical_report_urls": join_list(r.get("url") for r in reports),
+            "kept_reason": kept_reason,  # None in --full mode
+            "relevance_genes": None if full else join_list(matched),  # CIViC/panel genes it targets
         })
         for moa in (drug.get("mechanismsOfAction") or {}).get("rows") or []:
             for t in moa.get("targets") or []:
@@ -243,7 +275,11 @@ def build_opentargets(ot: dict, full: bool = False) -> dict:
         **_source_metadata(ot, OT, full),
         "trim_rules": OT_FULL_RULES if full else OT_TRIM_RULES,
         "kept_drug_stages": None if full else join_list(KEPT_DRUG_STAGES),
+        "panel_genes": None if full else join_list(PANEL_GENES),
+        "civic_genes_in_rule": None if full else join_list(sorted(civic_genes)),
         "drugs_kept": len(drugs),
+        "drugs_kept_by_stage": None if full else kept_by["clinical_stage"],
+        "drugs_kept_by_gene_only": None if full else kept_by["relevance_gene"],
         "drugs_in_file": len({c["drug"]["id"] for c in all_candidates}),
         "associated_targets_kept": len(assoc_rows),
         "associated_targets_in_disease": ot.get("total_associated_targets"),
@@ -507,7 +543,8 @@ def load_opentargets(tx, rows: dict) -> None:
         MERGE (dr)-[r:CANDIDATE_FOR]->(d)
         SET r.clinical_stage = row.clinical_stage, r.candidate_id = row.candidate_id,
             r.clinical_report_ids = row.clinical_report_ids,
-            r.clinical_report_urls = row.clinical_report_urls, {PROV.format(v='r')}
+            r.clinical_report_urls = row.clinical_report_urls,
+            r.kept_reason = row.kept_reason, r.relevance_genes = row.relevance_genes, {PROV.format(v='r')}
         """, rows["candidate_for"], **p)
     # Keyed on mechanism: a drug can hit one gene via several mechanisms (e.g. imatinib/ABL1).
     run_batched(tx, f"""
@@ -598,8 +635,29 @@ def read_sources(sources: list[str], require_all: bool) -> dict:
     return data
 
 
+def civic_gene_symbols(data: dict) -> set[str]:
+    """Genes with CIViC myeloma evidence, for the Open Targets drug rule. Read from
+    civic_mm.json even when CIViC isn't being loaded, so the trimmed Open Targets
+    result is the same whatever --sources says."""
+    civic = data.get(CIVIC)
+    if civic is None:
+        path = DATA_DIR / SOURCE_FILES[CIVIC][0]
+        if not path.exists():
+            sys.exit(f"Trimmed Open Targets load needs {path} for its gene rule; "
+                     "run ingestion/fetch_civic.py or use --full.")
+        civic = json.loads(path.read_text(encoding="utf-8"))
+    return {
+        g["hgnc_symbol"]
+        for e in civic["evidence_items"]
+        for v in e["molecularProfile"].get("variants") or []
+        for g, _ in _feature_genes(v)
+    }
+
+
 def build_supplements(data: dict, full: bool) -> tuple[dict | None, dict | None, list[dict]]:
-    ot_rows = build_opentargets(data[OT], full) if OT in data else None
+    ot_rows = None
+    if OT in data:
+        ot_rows = build_opentargets(data[OT], full, None if full else civic_gene_symbols(data))
     civic_rows = build_civic(data[CIVIC], full) if CIVIC in data else None
     return ot_rows, civic_rows, build_genes(ot_rows, civic_rows)
 
@@ -644,14 +702,20 @@ def dry_run(sources: list[str], full: bool) -> None:
     compare = OT in data
     sections = count_sections(data, full)
     others = count_sections(data, not full) if compare else None
+    if OT in data and not full:
+        meta = build_supplements(data, full=False)[0]["metadata"]
+        print(f"  trimming: kept {meta['drugs_kept']} of {meta['drugs_in_file']} drugs: "
+              f"{meta['drugs_kept_by_stage']} by myeloma stage ({', '.join(KEPT_DRUG_STAGES)}), "
+              f"{meta['drugs_kept_by_gene_only']} more because they target a CIViC or panel gene")
     if OT in data and CIVIC in data:
         ot_rows, civic_rows, _ = build_supplements(data, full)
+        assoc = {a["symbol"] for a in ot_rows["associated_targets"]}
+        drug_targets = {t["symbol"] for t in ot_rows["targets"]}
         shared = sorted(set(ot_rows["genes"]) & set(civic_rows["genes"]))
-        print(f"  genes in both Open Targets and CIViC ({len(shared)}): {', '.join(shared)}")
-    if OT in data and not full:
-        meta = build_opentargets(data[OT], full=False)["metadata"]
-        print(f"  trimming: kept {meta['drugs_kept']} of {meta['drugs_in_file']} drugs "
-              f"(myeloma stage {' or '.join(KEPT_DRUG_STAGES)})")
+        print(f"  genes in both Open Targets and CIViC ({len(shared)}):")
+        for s in shared:
+            how = [w for w, ok in (("associated target", s in assoc), ("drug target", s in drug_targets)) if ok]
+            print(f"    {s:10} Open Targets: {', '.join(how)}")
     for i, (title, nodes, edges) in enumerate(sections):
         print(f"\n{title}")
         if compare:
