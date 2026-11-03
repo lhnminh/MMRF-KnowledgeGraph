@@ -1,6 +1,8 @@
 """Pull the multiple myeloma entity + its associations from the Monarch API.
 
-Monarch KG data is CC0 (https://monarch-app.monarchinitiative.org/Licensing/).
+This legacy fetcher is retained for compatibility. Prefer scripts/extract.py's
+bounded calls and retrieval manifest. Check individual upstream data terms;
+Monarch's preferred-license guidance is not a blanket CC0 grant.
 """
 import json
 from pathlib import Path
