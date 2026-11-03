@@ -55,16 +55,30 @@ resource "aws_neptune_subnet_group" "this" {
   subnet_ids = aws_subnet.kg_private[*].id
 }
 
+# AD-005: Neptune port open only to the tool backend's security group, not to whole CIDRs.
+# The description is left as-is on purpose: changing it forces Terraform to replace the
+# security group, which fails while Neptune is attached to it.
 resource "aws_security_group" "neptune" {
   name        = "${var.name}-neptune-sg"
   description = "Allow openCypher/Bolt (8182) from inside the private VPC and the peered default VPC"
   vpc_id      = aws_vpc.kg.id
 
   ingress {
-    from_port   = 8182
-    to_port     = 8182
-    protocol    = "tcp"
-    cidr_blocks = [aws_vpc.kg.cidr_block, data.aws_vpc.default.cidr_block]
+    description     = "kg-graph Lambda"
+    from_port       = 8182
+    to_port         = 8182
+    protocol        = "tcp"
+    security_groups = [aws_security_group.loader_lambda.id]
+  }
+
+  # Temporary: the SageMaker workbench in the peered default VPC. Remove together with the
+  # notebook and the peering once ingest has moved off it.
+  ingress {
+    description     = "SageMaker workbench (temporary)"
+    from_port       = 8182
+    to_port         = 8182
+    protocol        = "tcp"
+    security_groups = [aws_security_group.notebook.id]
   }
 
   egress {
