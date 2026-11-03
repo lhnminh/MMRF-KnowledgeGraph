@@ -78,11 +78,77 @@ Browse the graph at http://localhost:7474 (user `neo4j`, password `password`).
 
 ## Migrating to Neptune
 
-Neptune's openCypher endpoint accepts the same Cypher used against local
-Neo4j, modulo a few syntax gaps (no `CREATE CONSTRAINT`, auth via Sigv4). Swap
-the bolt driver in `ingestion/load_neo4j.py` for the Neptune openCypher HTTPS
-endpoint once the AWS sandbox is live; `terraform/` holds the Neptune
-provisioning for that.
+`ingestion/load_neo4j.py` runs the same Cypher against local Neo4j and
+Neptune (openCypher over Bolt, port 8182, encrypted; IAM DB auth is off in
+`terraform/`, so no credentials are needed):
+
+```sh
+python3 ingestion/load_neo4j.py --dry-run            # counts only, no database needed
+python3 ingestion/load_neo4j.py --neptune            # load (or set NEPTUNE_MODE=1)
+python3 ingestion/load_neo4j.py --neptune --verify   # read-only counts vs. expected
+```
+
+Neptune can't store list-valued properties, so lists are stored as
+`|`-joined strings (read back with `split(x, '|')`). On Neptune this includes
+Monarch `ASSOCIATION.publications`, which stays a list on local Neo4j. There
+is no `CREATE CONSTRAINT`; re-runs stay duplicate-free through `MERGE`.
+
+### Loading Neptune from the SageMaker workbench notebook
+
+Neptune sits in a private VPC, so load it from the workbench notebook
+(`terraform output notebook_console_url`). The notebook has internet access
+for the fetch scripts and reaches Neptune over the VPC peering. Its lifecycle
+config already installs `neo4j`, `pyyaml` and `requests` into the `python3`
+conda env.
+
+1. On your machine, get the Neptune Bolt URI from Terraform:
+
+   ```sh
+   cd terraform && terraform output -raw neptune_bolt_uri
+   # bolt://<cluster-endpoint>:8182
+   ```
+
+2. Open the notebook, then **New → Terminal**, and clone the repo into
+   `~/SageMaker` (the only folder that survives a notebook restart):
+
+   ```sh
+   cd ~/SageMaker
+   git clone https://github.com/lhnminh/MMRF-KnowledgeGraph.git
+   cd MMRF-KnowledgeGraph
+   git checkout load/opentargets-civic   # until this branch is merged to main
+   source activate python3               # Python 3.10+ needed
+   pip install -r requirements.txt       # no-op if the lifecycle config already ran
+   ```
+
+3. Fetch the four sources into `data/raw/` (gitignored; DisMech data must not
+   be committed):
+
+   ```sh
+   python ingestion/fetch_monarch.py
+   python ingestion/fetch_dismech.py
+   python ingestion/fetch_opentargets.py
+   python ingestion/fetch_civic.py
+   ```
+
+4. Point the loader at Neptune, check the expected counts, and load:
+
+   ```sh
+   export NEO4J_URI=bolt://<cluster-endpoint>:8182   # value from step 1
+   python ingestion/load_neo4j.py --dry-run
+   python ingestion/load_neo4j.py --neptune
+   ```
+
+5. Verify. This runs only read queries and prints each node label and
+   relationship type next to the count expected from the files in
+   `data/raw/`, marking each `ok` or `DIFFERENT`:
+
+   ```sh
+   python ingestion/load_neo4j.py --neptune --verify
+   ```
+
+   Re-running the load is safe (everything is `MERGE`d), so the counts should
+   stay the same. If a count is higher than expected, the graph holds data
+   from an earlier load that used different source files.
 
 ## Status
 
