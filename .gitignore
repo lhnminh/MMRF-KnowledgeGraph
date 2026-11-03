@@ -3,3 +3,11 @@ __pycache__/
 data/raw/
 data/processed/
 .DS_Store
+.env.aws.sandbox
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/tfplan*
+terraform/lambda_loader.zip
+terraform/lambda_build/*
+!terraform/lambda_build/handler.py
