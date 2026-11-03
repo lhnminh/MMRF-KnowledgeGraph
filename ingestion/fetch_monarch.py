@@ -32,15 +32,23 @@ def fetch_all_associations(subject: str, limit: int = 100) -> list[dict]:
     return associations
 
 
+def fetch_source_version() -> str:
+    resp = requests.get(f"{API}/version", timeout=30)
+    resp.raise_for_status()
+    return resp.json()["monarch_kg_version"]
+
+
 def main() -> None:
     entity = requests.get(f"{API}/entity/{MONDO_ID}", timeout=30).json()
     associations = fetch_all_associations(MONDO_ID)
+    source_version = fetch_source_version()
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text(
-        json.dumps({"entity": entity, "associations": associations}, indent=2)
+        json.dumps({"source_version": source_version, "entity": entity, "associations": associations}, indent=2),
+        encoding="utf-8",
     )
-    print(f"Wrote {len(associations)} associations for {MONDO_ID} -> {OUT_PATH}")
+    print(f"Wrote {len(associations)} associations for {MONDO_ID} (Monarch KG {source_version}) -> {OUT_PATH}")
 
 
 if __name__ == "__main__":

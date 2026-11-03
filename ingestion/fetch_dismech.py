@@ -33,7 +33,7 @@ def main() -> None:
     resp.raise_for_status()
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUT_PATH.write_text(resp.text)
+    OUT_PATH.write_text(resp.text, encoding="utf-8")
     OUT_PATH.with_suffix(".yaml.provenance.json").write_text(
         json.dumps(
             {

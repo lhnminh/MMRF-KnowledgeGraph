@@ -36,28 +36,31 @@ resource "aws_neptune_subnet_group" "this" {
   subnet_ids = aws_subnet.kg_private[*].id
 }
 
-# AD-005: Neptune port open only to the tool backend's security group, not to whole CIDRs.
+# AD-005: Neptune port open only to named security groups, not to whole CIDRs.
 # The description is left as-is on purpose: changing it forces Terraform to replace the
 # security group, which fails while Neptune is attached to it.
+#
+# Rules are separate resources, never inline blocks: inline blocks make this resource own every
+# rule on the group, and they conflict with the separate kg-ingest rule in ingest.tf.
 resource "aws_security_group" "neptune" {
   name        = "${var.name}-neptune-sg"
   description = "Allow openCypher/Bolt (8182) from inside the private VPC and the peered default VPC"
   vpc_id      = aws_vpc.kg.id
+}
 
-  ingress {
-    description     = "kg-graph Lambda"
-    from_port       = 8182
-    to_port         = 8182
-    protocol        = "tcp"
-    security_groups = [aws_security_group.loader_lambda.id]
-  }
+resource "aws_vpc_security_group_ingress_rule" "neptune_kg_graph" {
+  security_group_id            = aws_security_group.neptune.id
+  referenced_security_group_id = aws_security_group.loader_lambda.id
+  description                  = "kg-graph Lambda"
+  ip_protocol                  = "tcp"
+  from_port                    = 8182
+  to_port                      = 8182
+}
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = [aws_vpc.kg.cidr_block]
-  }
+resource "aws_vpc_security_group_egress_rule" "neptune_vpc" {
+  security_group_id = aws_security_group.neptune.id
+  cidr_ipv4         = aws_vpc.kg.cidr_block
+  ip_protocol       = "-1"
 }
 
 resource "aws_neptune_cluster" "this" {
@@ -70,6 +73,9 @@ resource "aws_neptune_cluster" "this" {
   apply_immediately                   = true
   iam_database_authentication_enabled = false
   deletion_protection                 = false
+  # Must stay in line with the live cluster: changing it deletes and recreates the cluster and
+  # loses all data. Read `terraform plan` for "forces replacement" before every apply.
+  storage_encrypted = true
 
   serverless_v2_scaling_configuration {
     min_capacity = 1

@@ -135,7 +135,7 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
 
           inline_payload {
             name        = "kg_run_readonly_query"
-            description = "Run a single read-only openCypher query when no named tool fits. Writes, CALL and unbounded variable-length paths are rejected; results are capped at 100 rows. Graph: (:Disease {id,name})-[:ASSOCIATION {predicate,source,primary_knowledge_source,publications}]->(:Entity {id,label,category}); (:Disease)-[:HAS_MECHANISM]->(:Mechanism {name,description}); (:Mechanism)-[:LEADS_TO {evidence_pmid,evidence_snippet,dismech_explanation}]->(:Mechanism)."
+            description = "Run a single read-only openCypher query when no named tool fits. Writes, CALL and unbounded variable-length paths are rejected; results are capped at 100 rows. Graph: (:Disease {id,name})-[:ASSOCIATION {predicate,source,source_version,edge_origin,primary_knowledge_source,publications}]->(:Entity or :Disease {id,label,category}); (:Disease)-[:HAS_MECHANISM]->(:Mechanism {name,description}); (:Mechanism)-[:LEADS_TO {evidence_pmid,evidence_snippet,dismech_explanation}]->(:Mechanism)."
 
             input_schema {
               type = "object"

@@ -91,37 +91,56 @@ relationships alongside source version, retrieval time, license and hashes.
 
 ## AWS
 
-The stack runs in **us-west-2** as two independent Terraform stacks, each with its own state:
+Everything runs in **us-west-2** from one Terraform stack in `terraform/`: a private VPC with no NAT or internet gateway, Neptune (`mmrf-kg-cluster`), AgentCore Gateway and its logs, and two Lambdas:
 
-| Stack | Contains |
-| --- | --- |
-| `terraform/` | Private VPC, Neptune (`mmrf-kg-cluster`), `kg-graph` Lambda, AgentCore Gateway and its logs |
-| `terraform/neptune-ingest/` | S3 staging bucket, loader role, S3 gateway endpoint and a VPC utility Lambda (`terraform/utility.py`) that runs bulk loads. It creates no database. |
+| Lambda | Job | Neptune access |
+| --- | --- | --- |
+| `mmrf-kg-kg-graph` | Serves the `kg_*` tools through Gateway | Read only |
+| `mmrf-kg-ingest` | Reads the raw source files from S3 and writes them to Neptune | Read and write |
 
-There is no NAT gateway or internet gateway. Nothing outside the VPC connects to Neptune directly: agents call the tools through Gateway, and bulk loads go through the utility Lambda.
+Nothing outside the VPC connects to Neptune directly.
 
-To load the ETL export into Neptune:
+### Deploy
+
+Terraform deploys whatever zip it finds, so rebuild first. **Read the plan before applying, and stop if it says Neptune "must be replaced" or "forces replacement": that deletes the database and its data, with no snapshot.**
 
 ```sh
-uv run python scripts/transform.py
-uv run python scripts/validate.py
-GRAPH_BUCKET=$(terraform -chdir=terraform/neptune-ingest output -raw graph_bucket)
-GRAPH_UTILITY=$(terraform -chdir=terraform/neptune-ingest output -raw graph_utility_function)
-uv run python scripts/bulk_load.py --bucket "$GRAPH_BUCKET" --function "$GRAPH_UTILITY" --region us-west-2
-uv run python scripts/validate.py --function "$GRAPH_UTILITY"
+uv run python scripts/build_lambda.py
+terraform -chdir=terraform plan -out=tfplan
+terraform -chdir=terraform apply tfplan
 ```
+
+### Load the core graph
+
+`b1ca0b232b815a21b4ba95a62828c9979e9a49e7` is the commit for DisMech release `v0.1.46`, the pinned release in AD-001. The loader refuses files with no recorded source version, and it is safe to rerun because every write is a `MERGE`.
+
+```sh
+uv run python ingestion/fetch_monarch.py
+uv run python ingestion/fetch_dismech.py --revision b1ca0b232b815a21b4ba95a62828c9979e9a49e7
+
+BUCKET=$(terraform -chdir=terraform output -raw ingest_bucket)
+FUNCTION=$(terraform -chdir=terraform output -raw ingest_function)
+aws s3 cp data/raw/ "s3://$BUCKET/raw/" --recursive --exclude "*" \
+  --include "monarch_mm.json" --include "dismech_mm.yaml" --include "dismech_mm.yaml.provenance.json"
+aws lambda invoke --function-name "$FUNCTION" --cli-read-timeout 300 response.json
+cat response.json
+```
+
+The response reports the graph's node and relationship counts and the versions loaded. To load the same files into local Neo4j instead, run `uv run python ingestion/load_neo4j.py` (or `docker compose up -d neo4j` first if it isn't running).
+
+Open Targets and CIViC are not loaded into Neptune yet. The ETL above can export them, but they total about 12 MB, so when they are needed, revisit whether row-by-row writes are enough or the Neptune bulk loader is the better fit.
 
 ## Tests
 
 ```sh
 uv run pytest
-uv run ruff check src scripts tests terraform/utility.py
+uv run ruff check src scripts tests ingestion/load_neo4j.py terraform/lambda_build/handler.py
 ```
 
-Tests cover provenance-preserving exports and the loader's fixed inputs. They do not establish scientific validity or live AWS connectivity.
+Tests cover provenance-preserving exports and the ingest loader. They do not establish scientific validity or live AWS connectivity.
 
 ## Teardown
 
-Neptune bills while idle. Destroy `terraform/neptune-ingest` first (empty its bucket's `graph/` prefix beforehand; the bucket is deliberately not force-destroyed), then run `scripts/teardown.sh` for the main stack.
+Neptune bills while idle. `scripts/teardown.sh` destroys the stack, including Neptune's data with no final snapshot. It needs the Terraform state.
 
 No clinical diagnosis or treatment recommendations.

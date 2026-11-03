@@ -1,11 +1,9 @@
-"""Check CSV integrity locally and/or run fixed queries through the VPC utility Lambda."""
+"""Check the integrity of the local CSV export."""
 
 import argparse
 import csv
 import json
 from pathlib import Path
-
-import boto3
 
 
 def validate_files(directory):
@@ -38,33 +36,8 @@ def validate_files(directory):
     return {"nodes": len(nodes), "relationships": len(edges)}
 
 
-def invoke_utility(function, event, client=None):
-    client = client or boto3.client("lambda")
-    response = client.invoke(FunctionName=function, Payload=json.dumps(event).encode())
-    result = json.loads(response["Payload"].read())
-    if response.get("FunctionError"):
-        raise RuntimeError("Graph utility failed: " + json.dumps(result))
-    return result
-
-
-def validate_remote(result):
-    assert result["nodes"][0]["count"] > 0, "Neptune is empty"
-    assert result["relationships"][0]["count"] > 0, "No relationships in Neptune"
-    assert result["tp53"], "Missing TP53/myeloma association"
-    assert result["missing_provenance"][0]["count"] == 0, "Missing provenance in Neptune"
-    if "duplicate_node_ids" in result:
-        assert result["duplicate_node_ids"][0]["count"] == 0, "Duplicate logical node IDs in Neptune"
-    return result
-
-
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--directory", type=Path, default=Path("data/transformed"))
-    p.add_argument("--function", help="VPC utility Lambda name for remote validation")
     a = p.parse_args()
-    result = (
-        validate_remote(invoke_utility(a.function, {"action": "validate"}))
-        if a.function
-        else validate_files(a.directory)
-    )
-    print(json.dumps(result, indent=2))
+    print(json.dumps(validate_files(a.directory), indent=2))

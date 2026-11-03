@@ -379,7 +379,8 @@ def search_entities(session, args, env):
 
     duplicates = []
     for row in rows[:limit]:
-        label = next((l for l in row["labels"] if l in ("Disease", "Entity", "Mechanism")), (row["labels"] or ["Entity"])[0])
+        known = [name for name in row["labels"] if name in ("Disease", "Entity", "Mechanism")]
+        label = (known or row["labels"] or ["Entity"])[0]
         dataset = row["source"] or LABEL_DATASET.get(label, UNRECORDED)
         if label == "Mechanism":
             node_id, node_type = mechanism_id(row["label"]), "Mechanism"
@@ -491,7 +492,7 @@ def get_evidence(session, args, env):
             parameters = {"subject": subject, "object": obj}
         else:
             query = f"""
-                MATCH (d:Disease {{id: $subject}})-[r:ASSOCIATION {{predicate: $predicate}}]->(o:Entity {{id: $object}})
+                MATCH (d:Disease {{id: $subject}})-[r:ASSOCIATION {{predicate: $predicate}}]->(o {{id: $object}})
                 RETURN {ASSOCIATION_COLUMNS}
             """
             parameters = {"subject": subject, "predicate": predicate, "object": obj}
@@ -512,7 +513,7 @@ def get_evidence(session, args, env):
         WHERE r.evidence_pmid = $reference
         RETURN {LEADS_TO_COLUMNS}
         UNION ALL
-        MATCH (d:Disease)-[r:ASSOCIATION]->(o:Entity)
+        MATCH (d:Disease)-[r:ASSOCIATION]->(o)
         WHERE r.primary_knowledge_source = $reference OR r.publications IS NOT NULL
         RETURN {ASSOCIATION_COLUMNS}
     """

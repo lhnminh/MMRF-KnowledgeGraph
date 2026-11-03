@@ -19,7 +19,6 @@ node_modules/
 dist/
 build/
 terraform/terraform.tfvars
-terraform/neptune-ingest/terraform.tfvars
 .tools/
 terraform/tfplan*
 terraform/lambda_build/*

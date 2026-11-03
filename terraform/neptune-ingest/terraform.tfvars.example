@@ -1,9 +1,0 @@
-aws_profile               = "mmrf-hackathon"
-sandbox_account_id        = "YOUR_VERIFIED_ACCOUNT_ID"
-region                    = "us-west-2"
-cluster_identifier        = "mmrf-kg-cluster"
-cluster_resource_id       = "cluster-REPLACE_WITH_DB_CLUSTER_RESOURCE_ID"
-neptune_endpoint          = "https://YOUR_CLUSTER_ENDPOINT.neptune.amazonaws.com:8182"
-vpc_id                    = "vpc-REPLACE"
-subnet_ids                = ["subnet-REPLACE-A", "subnet-REPLACE-B"]
-neptune_security_group_id = "sg-REPLACE"
