@@ -47,8 +47,9 @@ the processed JSON (`*.raw*.json`) with its sha256, fetch timestamp (UTC),
 source version and license, so a snapshot can be verified later even though
 the APIs are live.
 
-All sources carry MONDO/PMID identifiers so provenance can be shown
-per-edge in the agent's answers.
+All sources carry disease identifiers (MONDO, or DOID mapped to MONDO), plus
+PMIDs or clinical-trial links where the source provides them, so provenance
+can be shown per-edge in the agent's answers.
 
 ## Local dev loop (pre-AWS-sandbox)
 
