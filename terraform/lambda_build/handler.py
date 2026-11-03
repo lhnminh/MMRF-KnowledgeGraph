@@ -18,10 +18,13 @@ Envelope rules applied here (AD-001, AD-004):
 The same code runs against Neptune and the local Neo4j stand-in, so the queries keep to
 openCypher that Neptune supports (no CALL, no list-valued property predicates).
 """
+import json
 import os
 import re
+import time
+from urllib.parse import urlsplit
 
-from neo4j import GraphDatabase
+from neo4j import Auth, GraphDatabase
 from neo4j.graph import Node, Path, Relationship
 
 CONTRACT_VERSION = "0.2"
@@ -32,6 +35,13 @@ NEPTUNE_URI = os.environ["NEPTUNE_URI"]
 # overrides exist so the handler can be pointed at the local Neo4j stand-in.
 NEPTUNE_TLS = os.environ.get("NEPTUNE_TLS", "true").lower() != "false"
 NEPTUNE_AUTH = (os.environ.get("NEPTUNE_USER", "username"), os.environ.get("NEPTUNE_PASSWORD", "password"))
+# Sign connections with the Lambda role. Safe to leave on before the cluster enforces IAM auth.
+NEPTUNE_IAM_AUTH = os.environ.get("NEPTUNE_IAM_AUTH", "false").lower() == "true"
+# A SigV4 signature expires after about 5 minutes and is only checked when a connection
+# opens. Neptune speaks Bolt 4.0 at most, so the driver cannot re-authenticate a connection;
+# it is rebuilt with a fresh signature before the old one could be rejected.
+SIGNATURE_MAX_AGE_SECONDS = 240
+LOG_INPUTS_MAX_CHARS = 2000
 
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
@@ -43,12 +53,41 @@ QUERY_MAX_HOPS = 5
 LABEL_DATASET = {"Entity": "monarch", "Mechanism": "dismech"}
 
 _driver = None
+_driver_created_at = 0.0
+
+
+def neptune_iam_auth():
+    """Bolt auth token signed with the Lambda role, per the Neptune Bolt IAM documentation."""
+    # botocore ships with the Lambda runtime; imported here so local runs don't need it.
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
+    from botocore.session import get_session
+
+    credentials = get_session().get_credentials()
+    if credentials is None:
+        raise RuntimeError("No AWS credentials available to sign the Neptune connection")
+    region = os.environ.get("AWS_REGION")
+    if not region:
+        raise RuntimeError("AWS_REGION is not set; it is needed to sign the Neptune connection")
+
+    request = AWSRequest(method="GET", url=NEPTUNE_URI + "/opencypher")
+    request.headers.add_header("Host", urlsplit(request.url).netloc)
+    SigV4Auth(credentials.get_frozen_credentials(), "neptune-db", region).add_auth(request)
+
+    token = {name: request.headers[name] for name in ("Authorization", "X-Amz-Date", "X-Amz-Security-Token", "Host")}
+    token["HttpMethod"] = request.method
+    return Auth("basic", "username", json.dumps(token), "realm")
 
 
 def get_driver():
-    global _driver
+    global _driver, _driver_created_at
+    if _driver is not None and NEPTUNE_IAM_AUTH and time.time() - _driver_created_at > SIGNATURE_MAX_AGE_SECONDS:
+        _driver.close()
+        _driver = None
     if _driver is None:
-        _driver = GraphDatabase.driver(NEPTUNE_URI, auth=NEPTUNE_AUTH, encrypted=NEPTUNE_TLS)
+        auth = neptune_iam_auth() if NEPTUNE_IAM_AUTH else NEPTUNE_AUTH
+        _driver = GraphDatabase.driver(NEPTUNE_URI, auth=auth, encrypted=NEPTUNE_TLS)
+        _driver_created_at = time.time()
     return _driver
 
 
@@ -62,9 +101,10 @@ class ToolInputError(ValueError):
 class Envelope:
     """Accumulates the parts of one AD-004 response envelope."""
 
-    def __init__(self, tool, inputs):
+    def __init__(self, tool, inputs, request_id=None):
         self.tool = tool
         self.inputs = inputs
+        self.request_id = request_id
         self.nodes = {}
         self.edges = {}
         self.evidence = {}
@@ -130,7 +170,11 @@ class Envelope:
             "evidence": list(self.evidence.values()),
             "query": self.query,
             "limitations": self.limitations,
-            "trace": {"plan": [], "tool_calls": [{"tool": self.tool, "inputs": self.inputs}]},
+            "trace": {
+                "request_id": self.request_id,
+                "plan": [],
+                "tool_calls": [{"tool": self.tool, "inputs": self.inputs}],
+            },
         }
         if table is not None:
             envelope["table"] = table
@@ -581,33 +625,70 @@ TOOLS = {
 # ---------------------------------------------------------------- handler
 
 
-def _tool_name(event, context):
-    name = None
-    try:
-        name = context.client_context.custom["bedrockAgentCoreToolName"]
-    except (AttributeError, KeyError, TypeError):
-        pass
-    name = name or event.get("tool")
+def _gateway_metadata(context):
+    custom = getattr(getattr(context, "client_context", None), "custom", None)
+    return custom if isinstance(custom, dict) else {}
+
+
+def _tool_name(event, metadata):
+    name = metadata.get("bedrockAgentCoreToolName") or event.get("tool")
     if name and "___" in name:
         name = name.split("___", 1)[1]
     return name
 
 
+def _log_call(tool, args, metadata, context, result, status, error, started):
+    """One JSON line per tool call. Gateway does not pass the caller's identity to the
+    Lambda, so these ids are what tie a query back to Gateway's own records of the call."""
+    inputs = json.dumps(args, default=str)
+    print(json.dumps({
+        "event": "kg_tool_call",
+        "tool": tool,
+        "status": status,
+        "duration_ms": round((time.time() - started) * 1000),
+        "gateway_request_id": metadata.get("bedrockAgentCoreAwsRequestId"),
+        "mcp_message_id": metadata.get("bedrockAgentCoreMcpMessageId"),
+        "gateway_id": metadata.get("bedrockAgentCoreGatewayId"),
+        "target_id": metadata.get("bedrockAgentCoreTargetId"),
+        "lambda_request_id": getattr(context, "aws_request_id", None),
+        "inputs": inputs[:LOG_INPUTS_MAX_CHARS],
+        "inputs_truncated": len(inputs) > LOG_INPUTS_MAX_CHARS,
+        "result_type": result["result_type"],
+        "nodes": len(result["graph"]["nodes"]),
+        "edges": len(result["graph"]["edges"]),
+        "rows": len(result["table"]["rows"]) if "table" in result else None,
+        "limitations": len(result["limitations"]),
+        "error": error,
+    }))
+
+
 def handler(event, context):
+    started = time.time()
     event = dict(event or {})
-    tool = _tool_name(event, context)
+    metadata = _gateway_metadata(context)
+    tool = _tool_name(event, metadata)
     args = {k: v for k, v in event.items() if k != "tool"}
-    env = Envelope(tool, args)
+    request_id = metadata.get("bedrockAgentCoreAwsRequestId") or getattr(context, "aws_request_id", None)
+    env = Envelope(tool, args, request_id)
+    status, error_text = "ok", None
 
     if tool not in TOOLS:
+        status = "rejected"
         env.limit(f"Unknown tool '{tool}'. Available tools: {', '.join(TOOLS)}.")
-        return env.build("text", "Tool not found.")
-    try:
-        with get_driver().session() as session:
-            return TOOLS[tool](session, args, env)
-    except ToolInputError as error:
-        env.limit(str(error))
-        return env.build("text", "The tool input was rejected.")
-    except Exception as error:  # report, never invent: the agent sees the failure as a limitation
-        env.limit(f"The graph query failed: {type(error).__name__}: {error}")
-        return env.build("text", "The graph query failed.")
+        result = env.build("text", "Tool not found.")
+    else:
+        try:
+            with get_driver().session() as session:
+                result = TOOLS[tool](session, args, env)
+        except ToolInputError as error:
+            status = "rejected"
+            env.limit(str(error))
+            result = env.build("text", "The tool input was rejected.")
+        except Exception as error:  # report, never invent: the agent sees the failure as a limitation
+            status = "error"
+            error_text = f"{type(error).__name__}: {error}"
+            env.limit(f"The graph query failed: {error_text}")
+            result = env.build("text", "The graph query failed.")
+
+    _log_call(tool, args, metadata, context, result, status, error_text, started)
+    return result

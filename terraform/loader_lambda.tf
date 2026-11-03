@@ -29,6 +29,24 @@ resource "aws_iam_role_policy_attachment" "loader_lambda_vpc" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
+data "aws_caller_identity" "current" {}
+
+# Read-only at the database: once the cluster enforces IAM auth, Neptune refuses any query
+# from this role that could write or delete (AD-004), whatever the handler's guard allows.
+resource "aws_iam_role_policy" "kg_graph_neptune_read" {
+  name = "${var.name}-kg-graph-neptune-read"
+  role = aws_iam_role.loader_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "neptune-db:ReadDataViaQuery"
+      Resource = "arn:aws:neptune-db:${var.region}:${data.aws_caller_identity.current.account_id}:${aws_neptune_cluster.this.cluster_resource_id}/*"
+    }]
+  })
+}
+
 resource "aws_lambda_function" "loader" {
   function_name = "${var.name}-kg-graph"
   role          = aws_iam_role.loader_lambda.arn
@@ -48,6 +66,9 @@ resource "aws_lambda_function" "loader" {
   environment {
     variables = {
       NEPTUNE_URI = "bolt://${aws_neptune_cluster.this.endpoint}:8182"
+      # Sign connections now; set iam_database_authentication_enabled on the cluster later,
+      # once this is confirmed working and ingest no longer depends on the notebook.
+      NEPTUNE_IAM_AUTH = "true"
     }
   }
 }

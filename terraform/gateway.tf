@@ -163,3 +163,29 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
     gateway_iam_role {}
   }
 }
+
+# Gateway's own record of tool calls, delivered to CloudWatch. The kg-graph Lambda is not told
+# who called, so this is where to look for the caller. Destroying the stack deletes these logs.
+resource "aws_cloudwatch_log_group" "kg_gateway" {
+  name              = "/aws/vendedlogs/bedrock-agentcore/gateway/${var.name}"
+  retention_in_days = 14
+}
+
+resource "aws_cloudwatch_log_delivery_source" "kg_gateway" {
+  name         = "${var.name}-gateway-logs"
+  log_type     = "APPLICATION_LOGS"
+  resource_arn = aws_bedrockagentcore_gateway.kg.gateway_arn
+}
+
+resource "aws_cloudwatch_log_delivery_destination" "kg_gateway" {
+  name = "${var.name}-gateway-logs"
+
+  delivery_destination_configuration {
+    destination_resource_arn = aws_cloudwatch_log_group.kg_gateway.arn
+  }
+}
+
+resource "aws_cloudwatch_log_delivery" "kg_gateway" {
+  delivery_source_name     = aws_cloudwatch_log_delivery_source.kg_gateway.name
+  delivery_destination_arn = aws_cloudwatch_log_delivery_destination.kg_gateway.arn
+}
