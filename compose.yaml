@@ -16,10 +16,8 @@ services:
       dockerfile_inline: |
         FROM python:3.12-slim
         WORKDIR /app
-        COPY requirements.txt .
-        RUN pip install --no-cache-dir -r requirements.txt
-        COPY ingestion ingestion
-        COPY data data
+        RUN pip install --no-cache-dir neo4j==5.28.8
+        COPY scripts/load_neo4j.py scripts/load_neo4j.py
     environment:
       NEO4J_URI: bolt://neo4j:7687
     volumes:
@@ -27,7 +25,7 @@ services:
     depends_on:
       - neo4j
     profiles: ["tools"]
-    command: ["python3", "ingestion/load_neo4j.py"]
+    command: ["python3", "scripts/load_neo4j.py"]
 
 volumes:
   neo4j_data:

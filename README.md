@@ -1,60 +1,82 @@
-# MMRF ORION — WS1: Knowledge Graph
+# ORION — Multiple Myeloma research prototype
 
-Hackathon prep for Workstream 1 (2026-11-03/04): ingest a permitted public
-myeloma knowledge graph and let an agent answer plain-language questions with
-a shown subgraph + provenance, distinguishing graph-encoded relationships from
-added explanation.
+One workflow: ask about TP53 → resolve graph entities → retrieve connections and publication evidence → query the same synthetic cohort through Guppy and ProteinPaint → render the existing Virtual Lab bar chart → ask a contextual follow-up.
 
-## Data sources & licensing
+The AWS implementation uses **Bedrock Converse**, **AgentCore Runtime**, and **Neptune openCypher**. A clearly labeled **scripted rehearsal** with a local JSON graph is also provided. Rehearsal does not call a foundation model and does not satisfy the AWS demonstration acceptance gate.
 
-- **Monarch KG / API** — primary source. CC0 per
-  https://monarch-app.monarchinitiative.org/Licensing/. Pulled live via the
-  public API (`https://api.monarchinitiative.org`), entry point
-  `MONDO:0009693` (plasma cell myeloma / multiple myeloma).
-- **DisMech** — supplementary mechanism paths ("pathograph") for multiple
-  myeloma only, from
-  `kb/disorders/Multiple_Myeloma.yaml` in
-  https://github.com/monarch-initiative/dismech. DisMech's **bulk-data
-  license is explicitly unsettled** (see their downloads page) — do not bulk
-  import. We use only the single Multiple Myeloma disorder page, whose
-  rendered site content is CC-BY 4.0, and cite it as such with the repo
-  commit/tag it was pulled from.
+The frontend is an overlay on the sandbox-pinned Virtual Lab revision `27cf09aca01a496b9d52f1b6a14e6859bf530fbb`, not a replacement UI. [sources.json](sources.json) also pins the sandbox. No real patient data, customer credentials, or customer infrastructure is needed.
 
-Both sources carry MONDO/PMID identifiers so provenance can be shown
-per-edge in the agent's answers.
+## Start the local demonstration
 
-## Local dev loop (pre-AWS-sandbox)
-
-Neptune supports openCypher, so local dev runs against Neo4j Community in
-Docker — closest free equivalent for Cypher semantics.
+Requirements: Python 3.12+, uv, Git, Docker Compose 2.17+, and the upstream sandbox's 12 GiB Docker memory / 30 GiB free disk. The sandbox frontend requires Node 24.18.1+ and npm 11.16.0+ when building outside Docker.
 
 ```sh
-docker compose up -d          # starts neo4j on :7474 (browser) / :7687 (bolt)
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python3 ingestion/fetch_monarch.py      # -> data/raw/monarch_mm.json
-python3 ingestion/fetch_dismech.py      # -> data/raw/dismech_mm.yaml
-docker compose --profile tools run --rm loader   # loads both into local Neo4j
+uv sync --group dev --python 3.12
+uv run python scripts/transform.py --curated-only
+uv run python scripts/validate.py
+uv run python scripts/bootstrap.py
+export ORION_ROOT="$PWD"
+cd vendor/sandbox
+python3 synthetic/generate.py
+docker compose -f compose.yaml -f "$ORION_ROOT/deploy/compose.orion.yaml" build
+docker compose -f compose.yaml -f "$ORION_ROOT/deploy/compose.orion.yaml" up -d --wait --wait-timeout 300
 ```
 
-Browse the graph at http://localhost:7474 (user `neo4j`, password `password`).
+Open **http://localhost:3080/orion**. Select “Female synthetic cases” and click the TP53 example. Inspect the graph path, evidence records, tool statuses and interactive chart. Save the returned selection using the existing Virtual Lab modal. Click “Show related genes with similar phenotypes.”
 
-> Note: on this machine, Zscaler blocks host-side loopback connections to
-> Docker-forwarded ports, so `load_neo4j.py` can't run from the host venv
-> directly against `localhost:7687`. The `loader` service runs it inside the
-> Docker network instead (`bolt://neo4j:7687`), which works. The fetch
-> scripts run fine from the host venv since they only make outbound HTTPS
-> calls.
+The packaged graph contains a handful of original public-fact paraphrases, publication URLs, gene/protein identifiers, disease phenotypes and pathway connections. The actual sandbox supplies the cohort measurements. If it is unavailable, ORION reports the tool error and shows no invented chart or cohort result.
 
-## Migrating to Neptune
+`bootstrap.py` verifies the frontend pin and refuses conflicting ORION files. Once the overlay is applied, use Compose directly; upstream `scripts/start.sh` correctly rejects modified source checkouts. Keep durable frontend changes in `frontend/overlay/`, then submit them to the frontend repository when desired.
 
-Neptune's openCypher endpoint accepts the same Cypher used against local
-Neo4j, modulo a few syntax gaps (no `CREATE CONSTRAINT`, auth via Sigv4). Swap
-the bolt driver in `ingestion/load_neo4j.py` for the Neptune openCypher HTTPS
-endpoint once the AWS sandbox is live; `terraform/` holds the Neptune
-provisioning for that.
+## Graph pipeline
 
-## Status
+To explore the ETL export in local Neo4j Browser:
 
-Prep only — no AWS sandbox access until the hackathon account is issued
-2026-11-03. `terraform/` is a placeholder until then.
+```sh
+uv run python scripts/transform.py
+docker compose up -d neo4j
+docker compose --profile tools run --build --rm loader
+```
+
+Open http://localhost:7474 and connect to `bolt://localhost:7687` with user `neo4j` and password `password`. Run `MATCH p=(n:Entity)-[:RELATIONSHIP]->(m:Entity) RETURN p LIMIT 100;` and select the graph result view. For TP53, run `MATCH p=(g:Gene {id:'HGNC:11998'})-[:RELATIONSHIP*1..2]-(d:Disease {id:'MONDO:0009693'}) RETURN p LIMIT 20;`. The local CSV loader preserves the Neptune schema and provenance, and repeated imports merge the same IDs. It adds/updates the exported records without clearing other graph data. This local preview does not load AWS Neptune.
+
+```sh
+# Optional bounded public Monarch refresh (9 association calls, no full KG import):
+uv run python scripts/extract.py
+# Use the already downloaded Monarch file if present; preserve raw records and IDs:
+uv run python scripts/transform.py
+# Optional local-only DisMech YAML transformation after checking its data terms:
+uv run python scripts/transform.py --include-dismech
+uv run python scripts/validate.py
+```
+
+Outputs are `data/transformed/nodes.csv`, `relationships.csv`, and `graph.json`. Only the two CSV files go into the Neptune loader prefix. Original predicates, source records, all evidence entries, source identifiers, hashes, retrieval dates and review/confidence status are retained. Missing retrieval dates from older downloads are explicitly `unknown`; transformation time is recorded separately. DisMech-generated mechanism IDs are deterministic and namespaced because those source steps have no ontology IDs.
+
+Raw inputs and transformed outputs are ignored by Git. The Docker build includes **only** curated public facts, not raw DisMech/Monarch files. DisMech YAML data terms remain unconfirmed; a rendered page's license does not establish the YAML's redistribution terms. See [data terms and attribution](docs/data-terms.md).
+
+## AWS deployment and acceptance
+
+To deploy **only Neptune** and load the existing ETL export without EKS, follow [the Neptune-only setup](docs/neptune.md). It provisions a private database and a VPC-connected bulk-loader Lambda using `terraform/neptune-only`.
+
+Follow [deployment instructions](docs/deployment.md) to deploy the upstream synthetic sandbox to EKS, provision private Neptune and AgentCore using Terraform, upload CSVs to same-Region S3, invoke the bulk loader from a VPC-connected Lambda, and install the server-side invocation bridge.
+
+The AWS Definition of Done is **not established by unit tests**. Run the live smoke test with `--require-aws`, then perform the browser checklist in [demo and verification](docs/demo.md). No AWS resources have been deployed by this implementation session.
+
+```sh
+uv run pytest
+node --test frontend/tests/*.test.mjs
+uv run ruff check src scripts tests terraform/utility.py
+terraform -chdir=terraform fmt -check
+terraform -chdir=terraform init -backend=false
+terraform -chdir=terraform validate
+```
+
+Tests cover the compound question through the actual Bedrock tool-use protocol with a mocked model/API, contextual follow-ups, streaming HTTP contract, bounded/parameterized queries, provenance-preserving exports, empty selections, and normalized API failures. They do not establish scientific validity or live AWS connectivity.
+
+## Scope and teardown
+
+Graph tools accept structured arguments, cap paths at three hops, bound results and apply a server query timeout. The model cannot submit query text or arbitrary endpoints. The API adapter supports current synthetic case selections and gender filters; unsupported filters fail explicitly. Cohort storage remains in existing frontend state. History is sent as up to six complete prior turns; it is not a durable research record.
+
+No clinical diagnosis or treatment recommendations. Shared disease associations are not evidence of identical gene-level phenotypes. The subset intentionally reports that limitation for the example follow-up.
+
+For local teardown, run the same two-file Compose command with `down`; add `--volumes` to delete generated indexes. For AWS, remove the ORION bridge, empty only the ORION graph prefix and ECR repository, destroy the ORION Terraform stack, then use the upstream sandbox teardown procedure. Full commands are in [deployment instructions](docs/deployment.md).
