@@ -11,10 +11,17 @@ Connection (environment variables):
   NEO4J_USER / NEO4J_PASSWORD   local Neo4j only (default neo4j / password).
 
 Usage:
-  python ingestion/load_neo4j.py              # load into the configured database
+  python ingestion/load_neo4j.py              # load all four sources into the configured database
   python ingestion/load_neo4j.py --dry-run    # read files, print counts, no DB needed
   python ingestion/load_neo4j.py --verify     # read-only: count nodes/edges in the DB
-  (add --neptune, or set NEPTUNE_MODE=1, for Neptune)
+  --sources opentargets,civic   load a subset (default: monarch,dismech,opentargets,civic)
+  --full                        skip relevance trimming
+  --neptune                     target Neptune (or set NEPTUNE_MODE=1)
+
+Relevance trimming (default): Open Targets drugs are limited to those at APPROVAL or
+PHASE_3 for myeloma; all associated targets, every TARGETS edge of a kept drug and all
+CIViC evidence are kept. Raw files are not modified. Each Open Targets/CIViC load
+writes a (:Dataset {source_dataset}) node recording load_mode and trim_rules.
 
 Neptune compatibility (openCypher over Bolt):
   - Neptune cannot store list-valued properties. Every list is stored as a
@@ -31,6 +38,7 @@ import json
 import os
 import sys
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -45,7 +53,23 @@ LIST_SEP = "|"
 BATCH_SIZE = 500
 OT = "opentargets"
 CIVIC = "civic"
+ALL_SOURCES = ("monarch", "dismech", OT, CIVIC)
 RECORDED = "recorded"
+
+# Relevance trimming (default; --full disables it). Raw files are never changed.
+KEPT_DRUG_STAGES = ("APPROVAL", "PHASE_3")  # Open Targets maxClinicalStage for myeloma
+OT_TRIM_RULES = (
+    "Associated targets: all top targets from the fetch kept. "
+    "Drugs: only candidates whose maximum clinical stage for multiple myeloma "
+    "(CANDIDATE_FOR.clinical_stage) is APPROVAL or PHASE_3; PHASE_2_3 and earlier dropped. "
+    "TARGETS: every mechanism-of-action edge of a kept drug kept, including genes "
+    "that are not associated targets."
+)
+OT_FULL_RULES = "None: all associated targets, all drug/clinical candidates and all their TARGETS edges loaded."
+CIVIC_RULES = (
+    "None: all evidence items from the fetch kept (ACCEPTED and SUBMITTED; "
+    "rejected items were excluded at fetch). Evidence.status shows which are curator-reviewed."
+)
 
 
 def join_list(values) -> str | None:
@@ -152,7 +176,7 @@ def _prov(source: str, version: str) -> dict:
     return {"source_dataset": source, "source_version": version, "edge_origin": RECORDED}
 
 
-def build_opentargets(ot: dict) -> dict:
+def build_opentargets(ot: dict, full: bool = False) -> dict:
     version = ot["data_version"]
     disease_id = ot["disease"]["graph_disease_id"]
     prov = _prov(OT, version)
@@ -175,7 +199,10 @@ def build_opentargets(ot: dict) -> dict:
         assoc_rows.append({"symbol": t["hgnc_symbol"], "score": a["score"]})
 
     drug_rows, candidate_rows, targets = [], [], {}
-    for c in ot["drug_and_clinical_candidates"]:
+    all_candidates = ot["drug_and_clinical_candidates"]
+    for c in all_candidates:
+        if not full and c.get("maxClinicalStage") not in KEPT_DRUG_STAGES:
+            continue  # dropping the drug also drops its TARGETS edges and drug-only genes
         drug = c["drug"]
         reports = c.get("clinicalReports") or []
         drug_rows.append({
@@ -211,14 +238,42 @@ def build_opentargets(ot: dict) -> dict:
         g["ensembl_id"] = g.pop("primary_ensembl") or ids[0]
         g["alt_ensembl_ids"] = join_list(i for i in ids if i != g["ensembl_id"])
 
+    drugs = list({d["chembl_id"]: d for d in drug_rows}.values())
+    metadata = {
+        **_source_metadata(ot, OT, full),
+        "trim_rules": OT_FULL_RULES if full else OT_TRIM_RULES,
+        "kept_drug_stages": None if full else join_list(KEPT_DRUG_STAGES),
+        "drugs_kept": len(drugs),
+        "drugs_in_file": len({c["drug"]["id"] for c in all_candidates}),
+        "associated_targets_kept": len(assoc_rows),
+        "associated_targets_in_disease": ot.get("total_associated_targets"),
+        "target_cutoff_score": (ot.get("target_cutoff") or {}).get("cutoff_score"),
+    }
     return {
-        "source": OT, "version": version, "prov": prov,
+        "source": OT, "version": version, "prov": prov, "metadata": metadata,
         "disease": {"id": disease_id, "name": ot["disease"]["name"]},
         "genes": genes,
         "associated_targets": assoc_rows,
-        "drugs": list({d["chembl_id"]: d for d in drug_rows}.values()),
+        "drugs": drugs,
         "candidate_for": list({d["chembl_id"]: d for d in candidate_rows}.values()),
         "targets": list(targets.values()),
+    }
+
+
+def _source_metadata(raw: dict, source: str, full: bool) -> dict:
+    """Scalar-only (Neptune) description of what was loaded from one source file."""
+    sha = raw.get("raw_response_sha256")
+    return {
+        "source_dataset": source,
+        "source_version": raw.get("data_version"),
+        "edge_origin": RECORDED,
+        "load_mode": "full" if full else "trimmed",
+        "source_name": raw.get("source"),
+        "source_url": raw.get("source_url"),
+        "license": raw.get("license"),
+        "fetch_timestamp_utc": raw.get("fetch_timestamp_utc"),
+        "raw_response_sha256": join_list(sha) if isinstance(sha, list) else sha,
+        "graph_disease_id": raw["disease"]["graph_disease_id"],
     }
 
 
@@ -232,7 +287,7 @@ def _feature_genes(variant: dict) -> list[tuple[dict, str | None]]:
     return []
 
 
-def build_civic(civic: dict) -> dict:
+def build_civic(civic: dict, full: bool = False) -> dict:
     version = civic["data_version"]
     disease_id = civic["disease"]["graph_disease_id"]
     civic_doid = civic["disease"]["doid"].removeprefix("DOID:")
@@ -280,8 +335,17 @@ def build_civic(civic: dict) -> dict:
             therapies.setdefault(t["name"], {"name": t["name"], "ncit_id": t.get("ncitId"), "civic_id": t["id"]})
             involves.add((e["id"], t["name"]))
 
+    status_counts = Counter(e.get("status") for e in civic["evidence_items"])
+    metadata = {
+        **_source_metadata(civic, CIVIC, full),
+        "trim_rules": CIVIC_RULES,
+        "evidence_kept": len(evidence),
+        "evidence_accepted": status_counts.get("ACCEPTED", 0),
+        "evidence_submitted": status_counts.get("SUBMITTED", 0),
+        "civic_disease_doid": civic["disease"]["doid"],
+    }
     return {
-        "source": CIVIC, "version": version, "prov": prov,
+        "source": CIVIC, "version": version, "prov": prov, "metadata": metadata,
         "disease": {"id": disease_id, "name": civic["disease"]["name"]},
         "genes": genes,
         "variants": list(variants.values()),
@@ -294,17 +358,19 @@ def build_civic(civic: dict) -> dict:
     }
 
 
-def build_genes(ot_rows: dict, civic_rows: dict) -> list[dict]:
-    """Merge gene info from both sources into one row per HGNC symbol.
+def build_genes(ot_rows: dict | None, civic_rows: dict | None) -> list[dict]:
+    """Merge gene info from the loaded sources into one row per HGNC symbol.
 
     Neptune has no list properties, so a gene found in both sources gets
     source_dataset "opentargets|civic" and source_version aligned position-by-position.
     Computing this here (not in Cypher) keeps it exact and idempotent on reload.
     """
+    loaded = [r for r in (ot_rows, civic_rows) if r]
     rows = []
-    for symbol in sorted(set(ot_rows["genes"]) | set(civic_rows["genes"])):
-        o, c = ot_rows["genes"].get(symbol, {}), civic_rows["genes"].get(symbol, {})
-        sources = [s for s, info in ((ot_rows, o), (civic_rows, c)) if info]
+    for symbol in sorted(set().union(*(r["genes"] for r in loaded))):
+        o = (ot_rows or {}).get("genes", {}).get(symbol, {})
+        c = (civic_rows or {}).get("genes", {}).get(symbol, {})
+        sources = [r for r in loaded if symbol in r["genes"]]
         rows.append({
             "symbol": symbol,
             "ensembl_id": o.get("ensembl_id"),
@@ -318,21 +384,25 @@ def build_genes(ot_rows: dict, civic_rows: dict) -> list[dict]:
     return rows
 
 
-def count_supplements(ot_rows: dict, civic_rows: dict, gene_rows: list[dict]) -> tuple[Counter, Counter]:
+def count_supplements(ot_rows: dict | None, civic_rows: dict | None, gene_rows: list[dict]) -> tuple[Counter, Counter]:
     nodes, edges = Counter(), Counter()
-    nodes["Disease"] = len({ot_rows["disease"]["id"], civic_rows["disease"]["id"]})
+    loaded = [r for r in (ot_rows, civic_rows) if r]
+    nodes["Disease"] = len({r["disease"]["id"] for r in loaded})
     nodes["Gene"] = len(gene_rows)
-    nodes["Drug"] = len(ot_rows["drugs"])
-    nodes["Variant"] = len(civic_rows["variants"])
-    nodes["Evidence"] = len(civic_rows["evidence"])
-    nodes["Therapy"] = len(civic_rows["therapies"])
-    edges["ASSOCIATED_TARGET"] = len(ot_rows["associated_targets"])
-    edges["CANDIDATE_FOR"] = len(ot_rows["candidate_for"])
-    edges["TARGETS"] = len(ot_rows["targets"])
-    edges["VARIANT_OF"] = len(civic_rows["variant_of"])
-    edges["ABOUT_VARIANT"] = len(civic_rows["about_variant"])
-    edges["IN_DISEASE"] = len(civic_rows["in_disease"])
-    edges["INVOLVES_THERAPY"] = len(civic_rows["involves_therapy"])
+    nodes["Dataset"] = len(loaded)  # one load-metadata node per source
+    if ot_rows:
+        nodes["Drug"] = len(ot_rows["drugs"])
+        edges["ASSOCIATED_TARGET"] = len(ot_rows["associated_targets"])
+        edges["CANDIDATE_FOR"] = len(ot_rows["candidate_for"])
+        edges["TARGETS"] = len(ot_rows["targets"])
+    if civic_rows:
+        nodes["Variant"] = len(civic_rows["variants"])
+        nodes["Evidence"] = len(civic_rows["evidence"])
+        nodes["Therapy"] = len(civic_rows["therapies"])
+        edges["VARIANT_OF"] = len(civic_rows["variant_of"])
+        edges["ABOUT_VARIANT"] = len(civic_rows["about_variant"])
+        edges["IN_DISEASE"] = len(civic_rows["in_disease"])
+        edges["INVOLVES_THERAPY"] = len(civic_rows["involves_therapy"])
     return nodes, edges
 
 
@@ -349,15 +419,64 @@ def run_batched(tx, query: str, rows: list[dict], **params) -> None:
         tx.run(query, rows=rows[i:i + BATCH_SIZE], **params)
 
 
+def _merge_gene_provenance(row: dict, old_ds: str | None, old_sv: str | None) -> dict:
+    """Combine this run's sources with any already on the node (e.g. a CIViC-only
+    re-run must not erase 'opentargets'). Order follows ALL_SOURCES."""
+    pairs = {}
+    old_d, old_v = (old_ds or "").split(LIST_SEP), (old_sv or "").split(LIST_SEP)
+    if old_ds and len(old_d) == len(old_v):
+        pairs.update(zip(old_d, old_v))
+    pairs.update(zip(row["source_dataset"].split(LIST_SEP), row["source_version"].split(LIST_SEP)))
+    order = [s for s in ALL_SOURCES if s in pairs] + sorted(s for s in pairs if s not in ALL_SOURCES)
+    return {**row, "source_dataset": LIST_SEP.join(order), "source_version": LIST_SEP.join(pairs[s] for s in order)}
+
+
 def load_genes(tx, gene_rows: list[dict]) -> None:
+    existing = {
+        rec["symbol"]: (rec["ds"], rec["sv"])
+        for rec in tx.run(
+            "MATCH (g:Gene) WHERE g.symbol IN $symbols "
+            "RETURN g.symbol AS symbol, g.source_dataset AS ds, g.source_version AS sv",
+            symbols=[r["symbol"] for r in gene_rows],
+        )
+    }
+    rows = [_merge_gene_provenance(r, *existing.get(r["symbol"], (None, None))) for r in gene_rows]
+    # coalesce keeps IDs another source already set (CIViC has no Ensembl ID, Open Targets no Entrez ID).
     run_batched(tx, """
         UNWIND $rows AS row
         MERGE (g:Gene {symbol: row.symbol})
-        SET g.ensembl_id = row.ensembl_id, g.alt_ensembl_ids = row.alt_ensembl_ids,
-            g.entrez_id = row.entrez_id, g.name = row.name, g.biotype = row.biotype,
+        SET g.ensembl_id = coalesce(row.ensembl_id, g.ensembl_id),
+            g.alt_ensembl_ids = coalesce(row.alt_ensembl_ids, g.alt_ensembl_ids),
+            g.entrez_id = coalesce(row.entrez_id, g.entrez_id),
+            g.name = coalesce(row.name, g.name), g.biotype = coalesce(row.biotype, g.biotype),
             g.source_dataset = row.source_dataset, g.source_version = row.source_version,
             g.edge_origin = $edge_origin
-        """, gene_rows, edge_origin=RECORDED)
+        """, rows, edge_origin=RECORDED)
+
+
+def check_load_mode(tx, metadata: dict) -> None:
+    """MERGE never deletes, so loading trimmed on top of full (or the reverse) would
+    leave a mixed graph whose Dataset node lies. Refuse instead."""
+    rec = tx.run(
+        "MATCH (m:Dataset {source_dataset: $s}) RETURN m.load_mode AS mode",
+        s=metadata["source_dataset"],
+    ).single()
+    if rec and rec["mode"] and rec["mode"] != metadata["load_mode"]:
+        sys.exit(
+            f"{metadata['source_dataset']} is already loaded in '{rec['mode']}' mode; this run is "
+            f"'{metadata['load_mode']}'. Clear the database first, or re-run with the same mode."
+        )
+
+
+def load_metadata(tx, metadata: dict, loaded_at: str) -> None:
+    """One (:Dataset) node per source recording what was loaded and how it was trimmed."""
+    # Explicit per-key SET (keys are code constants) rather than `SET m += $map`,
+    # which Neptune's openCypher compliance list doesn't name.
+    sets = ", ".join(f"m.{k} = $props.{k}" for k in metadata if k != "source_dataset")
+    tx.run(
+        f"MERGE (m:Dataset {{source_dataset: $props.source_dataset}}) SET {sets}, m.loaded_at_utc = $loaded_at",
+        props=metadata, loaded_at=loaded_at,
+    )
 
 
 def _merge_disease(tx, disease: dict) -> None:
@@ -457,15 +576,18 @@ def load_civic(tx, rows: dict) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def read_sources(require_all: bool) -> dict:
-    files = {
-        "monarch": ("monarch_mm.json", json.loads),
-        "dismech": ("dismech_mm.yaml", yaml.safe_load),
-        OT: ("opentargets_mm.json", json.loads),
-        CIVIC: ("civic_mm.json", json.loads),
-    }
+SOURCE_FILES = {
+    "monarch": ("monarch_mm.json", json.loads),
+    "dismech": ("dismech_mm.yaml", yaml.safe_load),
+    OT: ("opentargets_mm.json", json.loads),
+    CIVIC: ("civic_mm.json", json.loads),
+}
+
+
+def read_sources(sources: list[str], require_all: bool) -> dict:
     data = {}
-    for key, (name, parse) in files.items():
+    for key in sources:
+        name, parse = SOURCE_FILES[key]
         path = DATA_DIR / name
         if not path.exists():
             if require_all:
@@ -476,22 +598,28 @@ def read_sources(require_all: bool) -> dict:
     return data
 
 
-def count_sections(data: dict) -> list[tuple[str, Counter, Counter]]:
+def build_supplements(data: dict, full: bool) -> tuple[dict | None, dict | None, list[dict]]:
+    ot_rows = build_opentargets(data[OT], full) if OT in data else None
+    civic_rows = build_civic(data[CIVIC], full) if CIVIC in data else None
+    return ot_rows, civic_rows, build_genes(ot_rows, civic_rows)
+
+
+def count_sections(data: dict, full: bool) -> list[tuple[str, Counter, Counter]]:
     sections = []
     if "monarch" in data:
         sections.append(("Monarch", *count_monarch(data["monarch"])))
     if "dismech" in data:
         sections.append(("DisMech", *count_dismech(data["dismech"])))
-    if OT in data and CIVIC in data:
-        ot_rows, civic_rows = build_opentargets(data[OT]), build_civic(data[CIVIC])
-        sections.append(("Open Targets + CIViC", *count_supplements(ot_rows, civic_rows, build_genes(ot_rows, civic_rows))))
+    if OT in data or CIVIC in data:
+        title = " + ".join(n for k, n in ((OT, "Open Targets"), (CIVIC, "CIViC")) if k in data)
+        sections.append((title, *count_supplements(*build_supplements(data, full))))
     return sections
 
 
-def expected_totals(data: dict) -> tuple[Counter, Counter]:
+def expected_totals(data: dict, full: bool) -> tuple[Counter, Counter]:
     """Whole-graph counts after a load into an empty database (Disease is shared across sources)."""
     nodes, edges = Counter(), Counter()
-    for _, n, e in count_sections(data):
+    for _, n, e in count_sections(data, full):
         nodes.update(n)
         edges.update(e)
     disease_ids = set()
@@ -507,24 +635,40 @@ def expected_totals(data: dict) -> tuple[Counter, Counter]:
     return nodes, edges
 
 
-def dry_run() -> None:
-    print(f"Dry run: reading {DATA_DIR} (no database connection)")
-    data = read_sources(require_all=False)
-    sections = count_sections(data)
+def dry_run(sources: list[str], full: bool) -> None:
+    mode = "full" if full else "trimmed"
+    other_mode = "trimmed" if full else "full"
+    print(f"Dry run ({mode}): sources {', '.join(sources)}; reading {DATA_DIR} (no database connection)")
+    data = read_sources(sources, require_all=False)
+    # Trimming only changes Open Targets; when it's loaded, show the other mode alongside.
+    compare = OT in data
+    sections = count_sections(data, full)
+    others = count_sections(data, not full) if compare else None
     if OT in data and CIVIC in data:
-        ot_genes = build_opentargets(data[OT])["genes"]
-        civic_genes = build_civic(data[CIVIC])["genes"]
-        shared = sorted(set(ot_genes) & set(civic_genes))
+        ot_rows, civic_rows, _ = build_supplements(data, full)
+        shared = sorted(set(ot_rows["genes"]) & set(civic_rows["genes"]))
         print(f"  genes in both Open Targets and CIViC ({len(shared)}): {', '.join(shared)}")
-    for title, nodes, edges in sections:
+    if OT in data and not full:
+        meta = build_opentargets(data[OT], full=False)["metadata"]
+        print(f"  trimming: kept {meta['drugs_kept']} of {meta['drugs_in_file']} drugs "
+              f"(myeloma stage {' or '.join(KEPT_DRUG_STAGES)})")
+    for i, (title, nodes, edges) in enumerate(sections):
         print(f"\n{title}")
-        for kind, counter in (("nodes", nodes), ("edges", edges)):
+        if compare:
+            print(f"  {'':23} {mode:>7}  {other_mode:>7}")
+        for kind, counter, idx in (("node", nodes, 1), ("edge", edges, 2)):
             for label, n in counter.items():
-                print(f"  {kind[:-1]:4} {label:18} {n:5}")
+                line = f"  {kind:4} {label:18} {n:7}"
+                if compare:
+                    line += f"  {others[i][idx][label]:7}"
+                print(line)
     print("\n(Disease nodes are shared across sources: all sources use MONDO:0009693.)")
-    if len(sections) > 1:
-        nodes, edges = expected_totals(data)
-        print(f"Whole graph: {sum(nodes.values())} nodes, {sum(edges.values())} edges (compare with --verify)")
+    nodes, edges = expected_totals(data, full)
+    label = f" ({mode})" if compare else ""  # trimming only changes Open Targets
+    print(f"Whole graph{label}: {sum(nodes.values())} nodes, {sum(edges.values())} edges (compare with --verify)")
+    if compare:
+        n2, e2 = expected_totals(data, not full)
+        print(f"Whole graph ({other_mode}): {sum(n2.values())} nodes, {sum(e2.values())} edges")
 
 
 # Read-only; labels(), type(), count() and UNWIND are all on Neptune's supported list.
@@ -538,18 +682,19 @@ def read_counts(tx) -> tuple[dict, dict]:
     return nodes, edges
 
 
-def verify(neptune: bool) -> None:
+def verify(neptune: bool, sources: list[str], full: bool) -> None:
     driver = connect(neptune)
     with driver.session() as session:
         nodes, edges = session.execute_read(read_counts)
     driver.close()
 
     print(f"Verify: counts in {'Neptune' if neptune else 'Neo4j'} at {NEO4J_URI} (read-only)")
-    data = read_sources(require_all=False)
-    exp_nodes, exp_edges = expected_totals(data) if data else (Counter(), Counter())
+    data = read_sources(sources, require_all=False)
+    exp_nodes, exp_edges = expected_totals(data, full) if data else (Counter(), Counter())
     have_expected = bool(exp_nodes or exp_edges)
     if have_expected:
-        print("Expected counts come from the local data files (same as --dry-run).")
+        print(f"Expected counts: local files for {', '.join(data)} in {'full' if full else 'trimmed'} mode "
+              "(same as --dry-run with the same --sources/--full).")
     mismatches = 0
     for kind, actual, expected in (("node", nodes, exp_nodes), ("edge", edges, exp_edges)):
         for name in sorted(set(actual) | set(expected)):
@@ -576,36 +721,59 @@ def connect(neptune: bool):
     return GraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
 
 
+def parse_sources(value: str) -> list[str]:
+    sources = [v.strip().lower() for v in value.split(",") if v.strip()]
+    unknown = [v for v in sources if v not in ALL_SOURCES]
+    if unknown or not sources:
+        raise argparse.ArgumentTypeError(f"unknown source(s) {unknown}; choose from {','.join(ALL_SOURCES)}")
+    return [s for s in ALL_SOURCES if s in sources]  # fixed load order
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--sources", type=parse_sources, default=list(ALL_SOURCES),
+                        help=f"comma-separated subset of {','.join(ALL_SOURCES)} (default: all)")
+    parser.add_argument("--full", action="store_true",
+                        help="load everything; default trims Open Targets drugs to myeloma APPROVAL/PHASE_3")
     parser.add_argument("--dry-run", action="store_true", help="read files and print counts; no DB connection")
     parser.add_argument("--verify", action="store_true", help="read-only: print node/edge counts in the database")
     parser.add_argument("--neptune", action="store_true", help="target Amazon Neptune (same as NEPTUNE_MODE=1)")
     args = parser.parse_args()
 
     if args.dry_run:
-        dry_run()
+        dry_run(args.sources, args.full)
         return
 
     neptune = args.neptune or os.environ.get("NEPTUNE_MODE", "").lower() in ("1", "true", "yes")
     if args.verify:
-        verify(neptune)
+        verify(neptune, args.sources, args.full)
         return
 
-    data = read_sources(require_all=True)
-    ot_rows, civic_rows = build_opentargets(data[OT]), build_civic(data[CIVIC])
-    gene_rows = build_genes(ot_rows, civic_rows)
+    data = read_sources(args.sources, require_all=True)
+    ot_rows, civic_rows, gene_rows = build_supplements(data, args.full)
+    loaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    supplements = [r for r in (ot_rows, civic_rows) if r]
 
     driver = connect(neptune)
     with driver.session() as session:
-        session.execute_write(load_monarch, data["monarch"], neptune)
-        session.execute_write(load_dismech, data["dismech"])
-        session.execute_write(load_genes, gene_rows)
-        session.execute_write(load_opentargets, ot_rows)
-        session.execute_write(load_civic, civic_rows)
+        for rows in supplements:  # refuse before writing anything
+            session.execute_read(check_load_mode, rows["metadata"])
+        if "monarch" in data:
+            session.execute_write(load_monarch, data["monarch"], neptune)
+        if "dismech" in data:
+            session.execute_write(load_dismech, data["dismech"])
+        if gene_rows:
+            session.execute_write(load_genes, gene_rows)
+        if ot_rows:
+            session.execute_write(load_opentargets, ot_rows)
+        if civic_rows:
+            session.execute_write(load_civic, civic_rows)
+        for rows in supplements:
+            session.execute_write(load_metadata, rows["metadata"], loaded_at)
     driver.close()
     target = "Neptune" if neptune else "Neo4j"
-    print(f"Loaded Monarch, DisMech, Open Targets and CIViC into {target} at {NEO4J_URI}.")
+    mode = "full" if args.full else "trimmed"
+    print(f"Loaded {', '.join(args.sources)} ({mode}) into {target} at {NEO4J_URI}.")
 
 
 if __name__ == "__main__":

@@ -82,16 +82,62 @@ Browse the graph at http://localhost:7474 (user `neo4j`, password `password`).
 Neptune (openCypher over Bolt, port 8182, encrypted; IAM DB auth is off in
 `terraform/`, so no credentials are needed):
 
-```sh
-python3 ingestion/load_neo4j.py --dry-run            # counts only, no database needed
-python3 ingestion/load_neo4j.py --neptune            # load (or set NEPTUNE_MODE=1)
-python3 ingestion/load_neo4j.py --neptune --verify   # read-only counts vs. expected
-```
-
 Neptune can't store list-valued properties, so lists are stored as
 `|`-joined strings (read back with `split(x, '|')`). On Neptune this includes
 Monarch `ASSOCIATION.publications`, which stays a list on local Neo4j. There
 is no `CREATE CONSTRAINT`; re-runs stay duplicate-free through `MERGE`.
+
+### Loader options
+
+| Option | What it does |
+|---|---|
+| `--sources a,b` | Load only these sources: any of `monarch`, `dismech`, `opentargets`, `civic` (default: all four). Open Targets + CIViC go into their own Neptune database: `--sources opentargets,civic`. |
+| `--full` | Load everything in the files. Without it, the relevance rules below apply. |
+| `--dry-run` | Read the files and print how many nodes and edges of each type would be loaded. No database or `neo4j` driver needed. If Open Targets is selected, it prints trimmed and full counts side by side. |
+| `--verify` | Read-only: count each node label and relationship type in the database and compare with what the files predict (use the same `--sources`/`--full` as the load). |
+| `--neptune` | Target Neptune (same as `NEPTUNE_MODE=1`); needs `NEO4J_URI=bolt://<endpoint>:8182`. |
+
+```sh
+python3 ingestion/load_neo4j.py --dry-run --sources opentargets,civic
+python3 ingestion/load_neo4j.py --neptune --sources opentargets,civic
+python3 ingestion/load_neo4j.py --neptune --sources opentargets,civic --verify
+```
+
+### Relevance rules (default; `--full` turns them off)
+
+The Open Targets + CIViC database stands on its own, so it is trimmed for
+relevance to multiple myeloma rather than to balance against other sources.
+Trimming happens at load time; the files in `data/raw/` are never changed.
+
+- **Open Targets associated targets: all kept** (the 53 from the fetch, which
+  already keeps only the top 50 by association score, plus ties).
+- **Open Targets drugs: only those whose highest clinical stage *for myeloma*
+  is `APPROVAL` or `PHASE_3`** (102 of 553 in release 26.09). These are the
+  drugs with substantial myeloma-specific clinical evidence. `PHASE_2_3` and
+  earlier are dropped. The filter uses the myeloma stage
+  (`CANDIDATE_FOR.clinical_stage`), not the drug's overall stage
+  (`Drug.max_stage`), so a drug approved for another disease but only in
+  early myeloma trials is dropped.
+- **TARGETS edges of kept drugs: all kept**, even when the gene isn't an
+  associated target. A drug's mechanism is part of why it is relevant.
+  Genes reached only through dropped drugs are not loaded.
+- **CIViC: all evidence items kept** (49): CIViC's myeloma set is already
+  small and disease-specific. `Evidence.status` distinguishes `ACCEPTED`
+  (curator-reviewed) from `SUBMITTED` (not yet reviewed).
+
+Each Open Targets / CIViC load writes one `(:Dataset {source_dataset})` node
+per source. It records `load_mode` (`trimmed`/`full`), `trim_rules` (the
+rules above, in words), kept-vs-in-file counts, source version, license,
+fetch time, raw-file sha256 and `loaded_at_utc`. Anyone querying the graph can
+see what was filtered:
+
+```cypher
+MATCH (m:Dataset) RETURN m.source_dataset, m.load_mode, m.trim_rules, m.drugs_kept, m.drugs_in_file
+```
+
+`MERGE` never deletes, so switching a database between trimmed and full would
+leave a mix. The loader refuses to load a source in a different mode from the
+one its `Dataset` node records. Clear the database first if you need to switch.
 
 ### Loading Neptune from the SageMaker workbench notebook
 
@@ -130,20 +176,27 @@ conda env.
    python ingestion/fetch_civic.py
    ```
 
-4. Point the loader at Neptune, check the expected counts, and load:
+   For the Open Targets + CIViC database, only the last two are needed.
+
+4. Point the loader at that database's Neptune endpoint, check the expected
+   counts, and load. For the Open Targets + CIViC database:
 
    ```sh
    export NEO4J_URI=bolt://<cluster-endpoint>:8182   # value from step 1
-   python ingestion/load_neo4j.py --dry-run
-   python ingestion/load_neo4j.py --neptune
+   python ingestion/load_neo4j.py --dry-run --sources opentargets,civic
+   python ingestion/load_neo4j.py --neptune --sources opentargets,civic
    ```
 
-5. Verify. This runs only read queries and prints each node label and
-   relationship type next to the count expected from the files in
-   `data/raw/`, marking each `ok` or `DIFFERENT`:
+   Leave out `--sources` to load all four into one database. Add `--full` to
+   skip the relevance rules.
+
+5. Verify, with the same `--sources` (and `--full`, if used). This runs only
+   read queries and prints each node label and relationship type next to the
+   count expected from the files in `data/raw/`, marking each `ok` or
+   `DIFFERENT`:
 
    ```sh
-   python ingestion/load_neo4j.py --neptune --verify
+   python ingestion/load_neo4j.py --neptune --sources opentargets,civic --verify
    ```
 
    Re-running the load is safe (everything is `MERGE`d), so the counts should
