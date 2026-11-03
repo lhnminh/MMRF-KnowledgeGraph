@@ -13,5 +13,5 @@ if __name__ == "__main__":
     )
     p.add_argument("--curated-only", action="store_true", help="Portable demo without local raw downloads")
     a = p.parse_args()
-    graph = transform(a.output, a.include_dismech, not a.curated_only)
+    graph = transform(a.output, a.include_dismech, not a.curated_only, include_external=not a.curated_only)
     print(f"Wrote {len(graph['nodes'])} nodes and {len(graph['relationships'])} relationships to {a.output}")

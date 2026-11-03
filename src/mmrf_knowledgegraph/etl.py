@@ -11,6 +11,31 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 DISEASE = "MONDO:0009693"
 GENES = {"TP53", "KRAS", "NRAS", "BRAF"}
+NODE_ATTRIBUTES = [
+    (key, "String")
+    for key in [
+        "source_url",
+        "review_status",
+        "evidence_type",
+        "evidence_level",
+        "evidence_direction",
+        "significance",
+    ]
+]
+EDGE_ATTRIBUTES = [
+    ("association_score", "Double"),
+    *[
+        (key, "String")
+        for key in [
+            "clinical_stage",
+            "action_type",
+            "evidence_type",
+            "evidence_level",
+            "evidence_direction",
+            "significance",
+        ]
+    ],
+]
 
 
 def stable_id(prefix, value):
@@ -68,6 +93,17 @@ class Builder:
             "evidence": evidence or [],
             "original": original or {},
         }
+        return self.edges[edge_id]
+
+    def opentargets(self, path):
+        from .public_sources import load_opentargets
+
+        load_opentargets(self, path)
+
+    def civic(self, path):
+        from .public_sources import load_civic
+
+        load_civic(self, path)
 
     def curated(self, path):
         data = json.loads(path.read_text())
@@ -220,6 +256,7 @@ class Builder:
             "entity_type:String",
             "aliases_json:String",
             "provenance_json:String",
+            *[f"{key}:{kind}" for key, kind in NODE_ATTRIBUTES],
         ]
         edge_fields = [
             ":ID",
@@ -237,6 +274,7 @@ class Builder:
             "evidence_json:String",
             "original_json:String",
             "provenance_json:String",
+            *[f"{key}:{kind}" for key, kind in EDGE_ATTRIBUTES],
         ]
         with (output / "nodes.csv").open("w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
@@ -251,6 +289,7 @@ class Builder:
                         n["entity_type"],
                         json.dumps(n["aliases"]),
                         json.dumps(n["provenance"], default=str),
+                        *[n.get(key, "") for key, _ in NODE_ATTRIBUTES],
                     ]
                 )
         with (output / "relationships.csv").open("w", newline="", encoding="utf-8") as f:
@@ -279,7 +318,22 @@ class Builder:
                         "false",
                         json.dumps(r["evidence"], default=str),
                         json.dumps(r["original"], default=str),
-                        json.dumps({k: r[k] for k in ["sha256", "source_revision", "retrieval_status"]}),
+                        json.dumps(
+                            {
+                                k: r[k]
+                                for k in [
+                                    "sha256",
+                                    "source_revision",
+                                    "retrieval_status",
+                                    "license",
+                                    "raw_response_files",
+                                    "raw_response_sha256",
+                                    "snapshot_metadata",
+                                ]
+                                if k in r
+                            }
+                        ),
+                        *[r.get(key, "") for key, _ in EDGE_ATTRIBUTES],
                     ]
                 )
         return graph
@@ -291,11 +345,18 @@ def reference_url(ref):
     return "https://monarchinitiative.org/"
 
 
-def transform(output=ROOT / "data/transformed", include_dismech=False, include_monarch=True):
+def transform(
+    output=ROOT / "data/transformed", include_dismech=False, include_monarch=True, include_external=True
+):
     b = Builder()
     b.curated(ROOT / "data/curated/mm_evidence.json")
     if include_monarch and (ROOT / "data/raw/monarch_mm.json").exists():
         b.monarch(ROOT / "data/raw/monarch_mm.json")
     if include_dismech:
         b.dismech(ROOT / "data/raw/dismech_mm.yaml")
+    if include_external:
+        for source in ["opentargets", "civic"]:
+            path = ROOT / f"data/raw/{source}_mm.json"
+            if path.exists():
+                getattr(b, source)(path)
     return b.write(output)

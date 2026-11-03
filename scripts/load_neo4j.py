@@ -3,6 +3,7 @@
 import argparse
 import csv
 import json
+import math
 import os
 import re
 from collections import defaultdict
@@ -23,6 +24,10 @@ def properties(row):
             if value not in {"true", "false"}:
                 raise ValueError(f"Invalid Boolean for {name}")
             result[name] = value == "true"
+        elif kind == "Double":
+            result[name] = float(value)
+            if not math.isfinite(result[name]):
+                raise ValueError(f"Non-finite number for {name}")
         else:
             raise ValueError(f"Unsupported CSV property type: {kind}")
     return result
@@ -35,6 +40,8 @@ def identifier(value):
 
 
 def read_export(directory):
+    # Preserve complete source/evidence JSON, with a bounded 8 MiB field limit.
+    csv.field_size_limit(8 * 1024 * 1024)
     with (directory / "nodes.csv").open(newline="", encoding="utf-8") as f:
         nodes = list(csv.DictReader(f))
     with (directory / "relationships.csv").open(newline="", encoding="utf-8") as f:

@@ -1,5 +1,7 @@
 # Deploy Neptune without EKS
 
+If Neptune is already deployed, follow [existing-cluster ingestion](neptune-existing.md) instead. The hackathon cluster `mmrf-kg-cluster` is in **us-west-2**.
+
 Use `terraform/neptune-only` when you want to move the local graph to AWS before deploying the full ORION application. Neptune is an AWS managed database; it does not run inside the local Docker container. This stack is independent of the EKS stack in `terraform/`. Do not apply both to manage the same resources.
 
 The stack creates one encrypted, IAM-authenticated `db.t4g.medium` Neptune instance, a private VPC with two subnets, a same-Region S3 bucket and gateway endpoint, a loader role, and a VPC-connected utility Lambda. There is no public database endpoint or NAT gateway. Neptune and the supporting AWS services incur charges while provisioned. This is a disposable sandbox configuration: deletion protection is disabled and teardown does not create a final database snapshot.

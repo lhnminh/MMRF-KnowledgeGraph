@@ -79,29 +79,49 @@ Raw inputs and transformed outputs are ignored by Git. The Docker build includes
 ```sh
 uv run python ingestion/fetch_opentargets.py  # -> data/raw/opentargets_mm.json (+ .raw.json)
 uv run python ingestion/fetch_civic.py        # -> data/raw/civic_mm.json (+ .raw.N.json)
+uv run python scripts/transform.py
+uv run python scripts/validate.py
+docker compose --profile tools run --build --rm loader
 ```
 
-These fetchers save source snapshots. The current `scripts/transform.py` and
-CSV loaders do not yet import Open Targets or CIViC, so downloading these
-files does not add their records to Neo4j or Neptune.
+Transformation automatically includes these snapshots when present, verifies
+the raw-response checksums, and exports them with the existing curated and
+Monarch records. `--curated-only` excludes all optional raw snapshots. The
+CSV loader merges the new IDs into the local Neo4j graph. See the additional
+queries in [Neo4j examples](docs/neo4j-queries.cypher) to explore them.
+
+Open Targets association scores are stored as `association_score`, separate
+from confidence. Drugs are linked using `opentargets:drug_or_clinical_candidate`,
+with the disease-specific `clinical_stage` and clinical-report URLs; this is
+not a claim of approval or efficacy. Mechanism nodes link drugs to targets.
+
+CIViC evidence nodes retain `ACCEPTED` versus `SUBMITTED` review status,
+evidence type/level/direction, significance, publication links, the complete
+molecular profile, its variants (including both fusion partners), and the
+mentioned therapies. Rejected items are excluded. Evidence remains attached
+to its molecular profile, including multi-variant and combination-therapy
+context; it is not projected as a general gene–disease or treatment claim.
 
 Every gene in the Open Targets and CIViC outputs carries `hgnc_symbol`, so
 the two sources can be joined on gene symbol. Both outputs also record
-`graph_disease_id: MONDO:0009693`; future transformation into the graph
-should use `graph_disease_id` rather than each source's native disease ID
+`graph_disease_id: MONDO:0009693`; transformation uses this shared ID rather than each source's native disease ID
 (`MONDO_0009693` / `DOID:9538`). Each fetch saves the exact API reply next to
 the processed JSON (`*.raw*.json`) with its sha256, fetch timestamp (UTC),
 source version and license, so a snapshot can be verified later even though
-the APIs are live. Preserve PMIDs and clinical-trial links where provided
-so provenance can be shown per relationship in the agent's answers.
+the APIs are live. Approved gene symbols join the two sources to existing
+genes; native Ensembl, Entrez and HGNC identifiers remain in aliases and
+original records. PMIDs and clinical-trial links are retained on the
+relationships alongside source version, retrieval time, license and hashes.
 
 ## AWS deployment and acceptance
+
+If Neptune is already deployed, use [the existing-cluster ingestion setup](docs/neptune-existing.md). It adds the S3 staging bucket, loader role, endpoint and VPC utility without creating another database. The hackathon's `mmrf-kg-cluster` is in **us-west-2**.
 
 To deploy **only Neptune** and load the existing ETL export without EKS, follow [the Neptune-only setup](docs/neptune.md). It provisions a private database and a VPC-connected bulk-loader Lambda using `terraform/neptune-only`.
 
 Follow [deployment instructions](docs/deployment.md) to deploy the upstream synthetic sandbox to EKS, provision private Neptune and AgentCore using Terraform, upload CSVs to same-Region S3, invoke the bulk loader from a VPC-connected Lambda, and install the server-side invocation bridge.
 
-The AWS Definition of Done is **not established by unit tests**. Run the live smoke test with `--require-aws`, then perform the browser checklist in [demo and verification](docs/demo.md). No AWS resources have been deployed by this implementation session.
+The AWS Definition of Done is **not established by unit tests**. Run the live smoke test with `--require-aws`, then perform the browser checklist in [demo and verification](docs/demo.md). The existing-cluster ingestion resources have been deployed to the hackathon sandbox and the 1,738-node / 2,894-relationship export successfully bulk loaded into Neptune. The complete AgentCore/Virtual Lab demonstration still requires live acceptance checks.
 
 ```sh
 uv run pytest

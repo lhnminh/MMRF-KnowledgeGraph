@@ -27,6 +27,7 @@ def test_loader_uses_fixed_bucket_role_region_and_opencypher(monkeypatch):
     assert client.arguments["format"] == "opencypher"
     assert client.arguments["s3BucketRegion"] == "us-east-1"
     assert client.arguments["failOnError"] is True
+    assert client.arguments["updateSingleCardinalityProperties"] is True
     with pytest.raises(ValueError, match="content hash"):
         utility.handler({"action": "load", "version": "../arbitrary"}, None)
 

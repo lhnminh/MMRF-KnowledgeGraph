@@ -9,6 +9,8 @@ import boto3
 
 
 def validate_files(directory):
+    # A drug's complete clinical-report list can exceed Python's 128 KiB default.
+    csv.field_size_limit(8 * 1024 * 1024)
     with (directory / "nodes.csv").open(newline="") as f:
         nodes = list(csv.DictReader(f))
     with (directory / "relationships.csv").open(newline="") as f:
@@ -50,6 +52,8 @@ def validate_remote(result):
     assert result["relationships"][0]["count"] > 0, "No relationships in Neptune"
     assert result["tp53"], "Missing TP53/myeloma association"
     assert result["missing_provenance"][0]["count"] == 0, "Missing provenance in Neptune"
+    if "duplicate_node_ids" in result:
+        assert result["duplicate_node_ids"][0]["count"] == 0, "Duplicate logical node IDs in Neptune"
     return result
 
 
