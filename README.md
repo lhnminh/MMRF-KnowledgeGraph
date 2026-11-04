@@ -11,6 +11,9 @@ source → S3 → Neptune workflow, validation and notebook queries.
 
 ## Graph pipeline
 
+See the [ingestion pipeline diagram](docs/ingestion-pipeline.md) for the daily
+and manual source → S3 → Neptune paths, including clinical trials and validation.
+
 To explore the ETL export in local Neo4j Browser:
 
 ```sh

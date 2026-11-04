@@ -1,0 +1,13 @@
+%%oc
+MATCH (d:Disease)-[r:HAS_CLINICAL_TRIAL]->(t:ClinicalTrial)
+RETURN d.name AS disease,
+       t.id AS trial,
+       t.name AS title,
+       t.study_phase AS phase,
+       t.study_status AS status,
+       t.enrollment_count AS enrollment,
+       t.source_url AS registry_url,
+       r.publications AS references,
+       r.source_version AS source_version
+ORDER BY disease, trial
+LIMIT 20
