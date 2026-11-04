@@ -233,3 +233,128 @@ def test_lambda_reads_only_the_fixed_bucket_and_prefix(monkeypatch):
     assert {bucket for bucket, _ in requested} == {"fixed-bucket"}
     assert {key for _, key in requested} == set(objects)
     assert result["monarch_version"] == "2026-10-07" and result["dismech_version"] == "b1ca0b2"
+
+
+JMML_MONARCH = {
+    "source_version": "2026-10-07",
+    "entity": {"id": "MONDO:0011908", "name": "juvenile myelomonocytic leukemia"},
+    "associations": [
+        {
+            "subject": "HGNC:6407",
+            "subject_label": "KRAS",
+            "subject_category": "biolink:Gene",
+            "object": "MONDO:0011908",
+            "object_label": "juvenile myelomonocytic leukemia",
+            "object_category": "biolink:Disease",
+            "predicate": "biolink:gene_associated_with_condition",
+            "primary_knowledge_source": "infores:orphanet",
+            "publications": None,
+        }
+    ],
+}
+JMML_YAML = """
+name: Juvenile Myelomonocytic Leukemia
+disease_term: {term: {id: "MONDO:0011908"}}
+has_subtypes:
+  - name: KRAS-mutated
+    display_name: KRAS-mutated JMML
+    classification: molecular_driver
+    description: somatic KRAS gain of function
+    evidence: [{reference: "PMID:30670449", snippet: subtype quote, explanation: subtype commentary}]
+pathophysiology:
+  - name: RAS/MAPK Pathway Hyperactivation
+genetic:
+  - name: KRAS
+    association: Somatic activating mutation
+    subtype: KRAS-mutated
+    gene_term: {term: {id: "hgnc:6407", label: KRAS}}
+  - name: SETBP1
+    association: Cooperating somatic mutation
+    gene_term: {term: {id: "hgnc:15573", label: SETBP1}}
+treatments:
+  - name: Trametinib
+    evidence: [{reference: "PMID:38867349", snippet: "Ten infants and children were enrolled", explanation: trial}]
+    treatment_term:
+      term: {id: "NCIT:C93352", label: Targeted Therapy}
+      therapeutic_agent:
+        - {preferred_term: trametinib, term: {id: "CHEBI:75998", label: trametinib}}
+    target_mechanisms:
+      - target: RAS/MAPK Pathway Hyperactivation
+        treatment_effect: INHIBITS
+        description: inhibits MEK1/2
+        evidence: [{reference: "PMID:38867349", snippet: "phase II trial", explanation: aligns}]
+"""
+
+
+def test_gene_subject_association_keeps_the_gene_an_entity_at_gene_level():
+    tx = FakeTx()
+    loader.load_monarch(tx, JMML_MONARCH, "2026-10-07")
+    query, parameters = association_call(tx, "biolink:gene_associated_with_condition")
+    assert "MERGE (s:Entity {id: $subject})" in query and "MERGE (o:Disease {id: $object})" in query
+    assert "MERGE (d:Disease {id: $subject})" not in query
+    assert parameters["subject"] == "HGNC:6407" and parameters["object"] == "MONDO:0011908"
+    assert parameters["primary_knowledge_source"] == "infores:orphanet"
+    assert "{predicate: $predicate, source: 'monarch'}" in query
+    assert "source_version = $version" in query and "edge_origin = 'recorded'" in query
+
+
+def test_subtype_is_loaded_with_its_driver_gene_and_only_where_dismech_records_one():
+    tx = FakeTx()
+    loader.load_dismech(tx, loader.yaml.safe_load(JMML_YAML), "b1ca0b2")
+    subtype = next(p for _, p in tx.calls if p.get("predicate") == "dismech:has_subtype")
+    assert subtype["object"] == "dismech:subtype:MONDO:0011908:KRAS-mutated"
+    assert subtype["association_type"] == "molecular_driver" and subtype["pmid"] == "PMID:30670449"
+    drivers = [p for q, p in tx.calls if "HAS_DRIVER_GENE" in q]
+    assert [(p["subtype"], p["gene"]) for p in drivers] == [("dismech:subtype:MONDO:0011908:KRAS-mutated", "HGNC:6407")]
+
+
+def test_treatment_is_linked_to_the_mechanism_it_targets_with_that_edges_evidence():
+    tx = FakeTx()
+    loader.load_dismech(tx, loader.yaml.safe_load(JMML_YAML), "b1ca0b2")
+    query, parameters = next((q, p) for q, p in tx.calls if "TARGETS_MECHANISM" in q)
+    assert parameters["treatment"] == "dismech:treatment:Trametinib"
+    assert parameters["mechanism"] == "RAS/MAPK Pathway Hyperactivation"
+    assert parameters["effect"] == "INHIBITS" and parameters["pmid"] == "PMID:38867349"
+    assert "source_version = $version" in query and "edge_origin = 'recorded'" in query
+    for _, params in tx.calls:
+        assert not any(isinstance(value, (list, dict)) for value in params.values())
+
+
+def test_load_graphs_loads_every_set_and_reports_each_version():
+    result = loader.load_graphs(
+        FakeDriver(),
+        [
+            (json.dumps(MONARCH), DISMECH_YAML, PROVENANCE),
+            (json.dumps(JMML_MONARCH), JMML_YAML, PROVENANCE),
+        ],
+    )
+    assert result["monarch_version"] == "2026-10-07" and result["dismech_version"] == "b1ca0b2"
+
+
+def test_lambda_loads_the_named_sources_and_rejects_names_that_could_leave_the_prefix(monkeypatch):
+    objects = {
+        "raw/monarch_jmml.json": json.dumps(JMML_MONARCH),
+        "raw/dismech_jmml.yaml": JMML_YAML,
+        "raw/dismech_jmml.yaml.provenance.json": PROVENANCE,
+    }
+    requested = []
+
+    class FakeS3:
+        def get_object(self, Bucket, Key):
+            requested.append(Key)
+            return {"Body": BytesIO(objects[Key].encode())}
+
+    boto3 = ModuleType("boto3")
+    boto3.client = lambda name: FakeS3()
+    handler = ModuleType("handler")
+    handler.get_driver = FakeDriver
+    monkeypatch.setitem(sys.modules, "boto3", boto3)
+    monkeypatch.setitem(sys.modules, "handler", handler)
+    monkeypatch.setenv("INGEST_BUCKET", "fixed-bucket")
+
+    loader.lambda_handler({"sources": ["jmml"]}, None)
+    assert set(requested) == set(objects)
+
+    for bad in (["../secrets"], ["JMML"], ["a/b"], "jmml", [1]):
+        with pytest.raises(ValueError, match="sources must be"):
+            loader.lambda_handler({"sources": bad}, None)
