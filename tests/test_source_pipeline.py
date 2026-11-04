@@ -331,6 +331,24 @@ def test_direct_pipeline_invokes_only_after_snapshot_commit_and_saves_result():
     assert s3.puts == puts
 
 
+def test_scheduler_retries_reuse_a_run_and_each_occurrence_gets_a_fresh_one(monkeypatch):
+    import boto3
+
+    monkeypatch.setattr(boto3, "client", lambda *args, **kwargs: object())
+    monkeypatch.setenv("INGEST_BUCKET", BUCKET)
+    monkeypatch.setenv("DISMECH_REVISION", REVISION)
+    monkeypatch.setattr(fetch, "run_pipeline", lambda s3, bucket, run_id, revision, invoke: run_id)
+    schedule = "arn:aws:scheduler:us-west-2:548574235556:schedule/default/mmrf-kg-source-pipeline-daily"
+    event = {"id": schedule + "#2026-11-05T02:00:00Z", "source": "aws.scheduler"}
+    first = fetch.handler(event, None)
+    retry = fetch.handler({**event, "attempt_number": 2}, None)
+    next_day = fetch.handler({**event, "id": schedule + "#2026-11-06T02:00:00Z"}, None)
+    other_schedule = fetch.handler({**event, "id": schedule + "-other#2026-11-05T02:00:00Z"}, None)
+    assert str(fetch.uuid.UUID(first)) == first
+    assert first == retry and len({first, next_day, other_schedule}) == 3
+    assert fetch.handler({**event, "run_id": RUN_ID}, None) == RUN_ID
+
+
 def test_failed_direct_invocation_can_retry_the_same_snapshot(snapshot):
     s3, receipt, _, _ = snapshot
 

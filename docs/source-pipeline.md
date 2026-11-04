@@ -7,7 +7,7 @@ private ingestion Lambda to upsert and validate that exact snapshot in Neptune.
 ```mermaid
 flowchart LR
     Manual[Manual start] --> Fetch[Fetch Lambda: internet access]
-    Later[EventBridge nightly: later] -.-> Fetch
+    Daily[EventBridge Scheduler: daily 02:00 UTC] --> Fetch
     Sources[Monarch API + pinned DisMech record] --> Fetch
     Fetch --> S3[Private S3: original responses + manifest]
     Fetch -->|Direct Lambda Invoke with manifest receipt| Ingest[Ingest Lambda: existing private VPC]
@@ -17,11 +17,45 @@ flowchart LR
     Fetch -->|Save result.json| S3
 ```
 
-There is no Step Functions workflow, S3 notification, or EventBridge schedule.
-Later, EventBridge can invoke the fetch Lambda directly. Event IDs give scheduled
-retries a stable run ID; no schedule is installed now. The fetch Lambda runs
+EventBridge Scheduler invokes the fetch Lambda directly once daily at **02:00 UTC**
+(`cron(0 2 * * ? *)`), with no flexible delivery window. No Step Functions workflow
+or S3 notification is involved. Scheduled occurrences give retries a stable run ID,
+and each day creates a fresh snapshot. The fetch Lambda runs
 outside the VPC and writes S3 results, so no extra private VPC write permissions
 or endpoints are needed.
+
+## Daily schedule
+
+The schedule is `mmrf-kg-source-pipeline-daily` in the `default` schedule group in
+`us-west-2`. Its execution role can invoke only the source-fetch Lambda. Change
+`daily_schedule_hour_utc` (0-23) to use another daily UTC hour. The schedule follows
+UTC throughout the year; a local-time equivalent changes with daylight saving.
+
+The payload includes the schedule ARN and scheduled occurrence time in `id`.
+The existing handler converts this to a deterministic UUID. Scheduler delivery
+retries and Lambda asynchronous retries reuse the same snapshot/result instead
+of creating a new run. The next scheduled occurrence gets a different UUID.
+It deliberately does not use Scheduler's execution ID, which changes per attempt.
+See [Scheduler context attributes](https://docs.aws.amazon.com/scheduler/latest/UserGuide/managing-schedule-context-attributes.html).
+
+Scheduler retries failed delivery up to twice within one hour. A successful
+delivery means Lambda accepted the event asynchronously, not that Neptune has
+been updated. Function execution failures use Lambda's asynchronous retry
+behavior. Check `result.json` in S3 and both Lambda log groups to confirm ingestion.
+No dead-letter queue or notification channel is configured in this prototype.
+See [scheduled Lambda invocation](https://docs.aws.amazon.com/lambda/latest/dg/with-eventbridge-scheduler.html).
+
+Inspect the deployed schedule:
+
+```sh
+aws scheduler get-schedule --name mmrf-kg-source-pipeline-daily --group-name default \
+  --profile mmrf-hackathon --region us-west-2
+```
+
+To pause daily runs, set `daily_schedule_enabled = false` in an ignored
+`terraform/source-pipeline/terraform.tfvars`, review the plan in that root, and
+apply it. Set it back to `true` to resume. Manual runs still work when paused.
+Destroying this independent stack also removes the schedule and its execution role.
 
 ## Run the deployed pipeline
 
@@ -143,7 +177,7 @@ This incremental workflow does not call the bulk loader or migrate the existing
 graph's identifier scheme.
 
 DisMech stays pinned to commit `b1ca0b232b815a21b4ba95a62828c9979e9a49e7`
-(`v0.1.46`). A nightly trigger will refresh that reviewed record, not silently
+(`v0.1.46`). Daily runs refresh that reviewed record, not silently
 switch to `main`. Update the Terraform revision deliberately for an upgrade.
 Only one record is fetched; no bulk DisMech or complete Monarch download occurs.
 DisMech data terms remain unconfirmed for redistribution: keep the snapshots
@@ -160,9 +194,10 @@ terraform -chdir=terraform/source-pipeline plan -out=source-pipeline.tfplan
 terraform -chdir=terraform/source-pipeline apply source-pipeline.tfplan
 ```
 
-Use only this independent root. Its plan adds two Lambdas, their roles/log groups,
-and permission for the fetch Lambda to invoke only the ingestion Lambda. It does
-not replace or edit the existing
+Use only this independent root. A fresh deployment adds two Lambdas, their roles/log
+groups, permission for direct ingestion, and the daily Scheduler schedule with its
+execution role/policy. Updating an already deployed direct-Lambda pipeline adds
+only the schedule, its role, and its policy. It does not replace or edit the existing
 bucket, graph, gateway, or networking. Preserve its ignored local Terraform state.
 Source data, zip packages, plans, and state must not be committed.
 
@@ -194,7 +229,8 @@ uv run python scripts/run_source_pipeline.py
 
 Tests cover manifest commit ordering, interrupted uploads/retries, corrupt files,
 source-version changes, scope limits, validation failures before commit, direct
-Lambda errors, and retrying failed/completed runs with the same snapshot.
+Lambda errors, retrying failed/completed runs with the same snapshot, and stable
+run IDs across Scheduler retries with a fresh ID for each occurrence.
 After the live run, open the graph explorer and select **Refresh**. Select a
 relationship to see its source version and retrieval timestamp. Original records
 and complete provenance are available through the result's manifest URI in S3.
@@ -206,6 +242,6 @@ terraform -chdir=terraform/source-pipeline plan -destroy -out=source-pipeline.tf
 terraform -chdir=terraform/source-pipeline apply source-pipeline.tfplan
 ```
 
-This removes the two pipeline Lambdas, roles, policies, and logs. Source snapshots/results
+This removes the daily schedule and the two pipeline Lambdas, roles, policies, and logs. Source snapshots/results
 in the existing bucket and data already merged into Neptune remain. Manage those
 separately if deliberately cleaning up the sandbox.

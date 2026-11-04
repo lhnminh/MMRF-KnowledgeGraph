@@ -119,8 +119,9 @@ terraform -chdir=terraform apply tfplan
 
 For a repeatable **public sources → versioned S3 snapshots → validated Neptune
 refresh** workflow, see [Source ingestion pipeline](docs/source-pipeline.md).
-Run it manually with `uv run python scripts/run_source_pipeline.py`; an EventBridge
-nightly trigger can be added later to invoke the fetch Lambda directly.
+EventBridge Scheduler invokes the fetch Lambda daily at **02:00 UTC**. Manual runs
+remain available with `uv run python scripts/run_source_pipeline.py`; schedule
+configuration and pause instructions are in the pipeline guide.
 
 `b1ca0b232b815a21b4ba95a62828c9979e9a49e7` is the commit for DisMech release `v0.1.46`, the pinned release in AD-001. The loader refuses files with no recorded source version, and it is safe to rerun because every write is a `MERGE`.
 
