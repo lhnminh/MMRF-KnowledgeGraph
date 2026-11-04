@@ -38,15 +38,15 @@ flowchart TB
     caller -->|"MCP call"| gw
     gw --> target
     target -->|"InvokeFunction"| kggraph
-    kggraph -->|"Bolt 8182, read-only"| neptune
+    kggraph -->|"Bolt 8182 (openCypher), SigV4-signed<br/>read-only by app-layer guard; IAM auth pending"| neptune
 
-    kgingest -->|"Bolt 8182, read+write"| neptune
+    kgingest -->|"Bolt 8182 (openCypher), SigV4-signed<br/>read+write; IAM auth pending"| neptune
     kgingest -->|"GetObject via endpoint"| s3endpoint
-    s3endpoint --- s3
+    s3endpoint -->|"gateway endpoint"| s3
 
     browser -->|"HTTPS + bearer token"| apigw
     apigw --> apilambda
-    apilambda -->|"InvokeFunction (read-only tool only)"| kggraph
+    apilambda -->|"InvokeFunction, fixed query<br/>(kg_run_readonly_query only)"| kggraph
 
     kggraph -.->|"logs"| cw
     kgingest -.->|"logs"| cw
@@ -59,11 +59,11 @@ flowchart TB
 | Component | Terraform | Current scaling behavior | Known open limit |
 |---|---|---|---|
 | Neptune cluster (`mmrf-kg-cluster`) | `main.tf` | Serverless v2, compute auto-scales 1–8 NCUs with load | Single instance, no reader, `skip_final_snapshot = true` — an instance/AZ fault is a full outage with no recovery path (well-architected-review.md, Reliability) |
-| `kg-graph` Lambda | `loader_lambda.tf` | Stateless; Lambda scales concurrency automatically per request | No reserved/provisioned concurrency set; cold starts happen in-VPC; nothing upstream bounds concurrent calls (see Gateway row) |
-| `kg-ingest` Lambda | `ingest.tf` | Scales fine as a function, but each invocation does one full load | Writes one node/edge per round trip with no batching or backoff; fine at ~50 nodes, a known blocker at 15x data volume (Open Targets + CIViC) per well-architected-review.md |
+| `kg-graph` Lambda | `loader_lambda.tf` | Stateless; Lambda scales concurrency automatically per request | No reserved/provisioned concurrency set; cold starts happen in-VPC; nothing upstream bounds concurrent calls (see Gateway row). `tracing_config.mode = "Active"` is set, but the VPC has no NAT/IGW and no X-Ray interface endpoint, so X-Ray segments from inside the VPC have no path out and are silently dropped — basic Lambda logs still work, since those go through the Lambda service plane, not this VPC's routing |
+| `kg-ingest` Lambda | `ingest.tf` | Scales fine as a function, but each invocation does one full load | Writes one node/edge per round trip with no batching or backoff; fine at ~50 nodes, a known blocker at 15x data volume (Open Targets + CIViC) per well-architected-review.md. Same X-Ray gap as `kg-graph` above |
 | AgentCore Gateway | `gateway.tf` | Exposes 5 tools over MCP, `AWS_IAM` authorizer | No WAF, no request throttling, no per-tool scoping — any caller holding `bedrock-agentcore:InvokeGateway` can call all 5 tools including the open-ended `kg_run_readonly_query`, bounded only by that tool's own row/hop caps |
 | S3 ingest bucket | `ingest.tf` | S3 scales inherently; reached only through the free S3 gateway VPC endpoint (no NAT) | None at this data size |
-| Graph API (`graph-api/main.tf`) | `terraform/graph-api` | Independent stack; its own Lambda scales with Lambda concurrency | HTTP API stage is deliberately throttled to 5 rps / burst 20 for the sandbox; every request still funnels through the single `kg-graph` Lambda it invokes |
+| Graph API (`graph-api/main.tf`) | `terraform/graph-api` | Independent stack; its own Lambda scales with Lambda concurrency | HTTP API stage is deliberately throttled to 5 rps / burst 20 for the sandbox; every request still funnels through the single `kg-graph` Lambda it invokes. The dependency is a hardcoded function-name default (`var.graph_function_name = "mmrf-kg-kg-graph"`) resolved via `data "aws_lambda_function"`, not remote state — destroying the parent stack leaves this stack with a dangling reference instead of a Terraform-visible error |
 | CloudWatch alarms/SNS | `alarms.tf` | Managed service, scales without action | Alarms cover Lambda crashes/timeouts and query errors, not an idle-but-running Neptune cluster or a Gateway-level failure |
 
 `kg_run_readonly_query` itself caps output at 100 rows and 5 hops but not intermediate
