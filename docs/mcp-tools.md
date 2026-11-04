@@ -56,7 +56,8 @@ Each result's `content[0].text` is a JSON string holding this envelope:
   "graph": {
     "nodes": [{ "id": "dismech:mechanism:MONDO:0009693:A", "label": "A", "type": "Mechanism", "source_dataset": "dismech", "source_version": "<commit>" }],
     "edges": [{ "id": "dismech:dismech:mechanism:MONDO:0009693:A|leads_to|dismech:mechanism:MONDO:0009693:B", "source": "dismech:mechanism:MONDO:0009693:A", "target": "dismech:mechanism:MONDO:0009693:B", "predicate": "leads_to",
-                "edge_origin": "recorded", "source_dataset": "dismech", "source_version": "<commit>", "evidence_ids": ["<evidence id>"] }]
+                "edge_origin": "recorded", "source_dataset": "dismech", "source_version": "<commit>", "evidence_ids": ["<evidence id>"] }],
+    "paths": [{ "node_ids": ["<node id>", "<node id>", "<node id>"], "edge_ids": ["<edge id>", "<edge id>"] }]
   },
   "evidence": [{ "id": "<evidence id>", "reference": "PMID:34201396", "snippet": "<quoted text>", "source_dataset": "dismech", "source_version": "<commit>" }],
   "query": { "language": "openCypher", "text": "<the query that ran>", "parameters": {} },
@@ -66,6 +67,22 @@ Each result's `content[0].text` is a JSON string holding this envelope:
 ```
 
 `kg_run_readonly_query` returns `result_type: "table"` with an added `table: { "columns": [], "rows": [] }`. Rejected input and failures return `result_type: "text"`.
+
+### Draw the graph from `graph`
+
+Every tool fills `graph` the same way, so one renderer works for all of them: `nodes`, `edges` (each `source` and `target` is a node `id`) and `paths`.
+
+`paths` lists ordered chains of the returned edges. In each path, `node_ids[i]` and `node_ids[i + 1]` are joined by `edge_ids[i]`, following the edge direction.
+
+- Named tools: only three build paths, because only they return results that form chains. A path is a longest chain of two or more returned edges that never visits a node twice. The other tools (`kg_search_entities`, `kg_get_phenotypes`, `kg_get_evidence`, `kg_get_gene_context`) always return `"paths": []`, so use `edges`. A result with no chain also has `"paths": []`.
+  - `kg_get_mechanism_paths`: chains start at a mechanism that nothing leads into.
+  - `kg_get_treatment_evidence`: chains start at the disease (disease, treatment, agent, target gene; or disease, treatment, mechanism).
+  - `kg_get_gene_disease_association`: chains start at the disease (disease, subtype, gene).
+
+  At most 20 paths are listed, and `limitations` says when more exist. `edges` is always complete.
+- `kg_run_readonly_query`: `graph` holds the nodes, relationships and paths that the query returned, using the same ids as the named tools. A path in `graph.paths` is a `MATCH p = ...` value that the query returned. A node or relationship needs an `id` property to appear, so return it whole (`RETURN a, r, b` or `RETURN p`), not as `a.name`. Scalar columns stay in `table`.
+
+A path is a chain in the returned graph. It is not the order in which Neptune evaluated the query.
 
 Every tool declares an `outputSchema` matching this shape, so a client that negotiates MCP protocol version `2025-06-18` or later should also get the envelope back as `structuredContent`, avoiding a second JSON parse of `content[0].text`. As of writing, the Gateway itself still negotiates protocol version `2025-03-26` (which predates `outputSchema`/`structuredContent`), so `structuredContent` isn't populated yet — only `content[0].text`. This should start working with no changes on our side once AgentCore Gateway updates its MCP protocol support.
 

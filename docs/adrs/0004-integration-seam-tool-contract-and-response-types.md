@@ -142,7 +142,8 @@ Envelope (illustrative):
     "nodes": [ { "id": "MONDO:0009693", "label": "string", "type": "Disease",
                  "source_dataset": "dismech", "source_version": "v0.1.46" } ],
     "edges": [ { "id": "string", "source": "id", "target": "id", "predicate": "causes",
-                 "edge_origin": "recorded", "evidence_ids": ["string"] } ]
+                 "edge_origin": "recorded", "evidence_ids": ["string"] } ],
+    "paths": [ { "node_ids": ["id"], "edge_ids": ["id"] } ]
   },
   "native_view": {
     "tool": "survival | matrix | de",

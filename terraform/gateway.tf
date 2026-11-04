@@ -133,6 +133,13 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
                   type       = "array"
                   items_json = jsonencode({ type = "object" })
                 }
+
+                property {
+                  name        = "paths"
+                  type        = "array"
+                  description = "Ordered chains of graph.edges: node_ids[i] and node_ids[i + 1] are joined by edge_ids[i]."
+                  items_json  = jsonencode({ type = "object" })
+                }
               }
 
               property {
@@ -284,6 +291,13 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
                   type       = "array"
                   items_json = jsonencode({ type = "object" })
                 }
+
+                property {
+                  name        = "paths"
+                  type        = "array"
+                  description = "Ordered chains of graph.edges: node_ids[i] and node_ids[i + 1] are joined by edge_ids[i]."
+                  items_json  = jsonencode({ type = "object" })
+                }
               }
 
               property {
@@ -428,6 +442,13 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
                   name       = "edges"
                   type       = "array"
                   items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name        = "paths"
+                  type        = "array"
+                  description = "Ordered chains of graph.edges: node_ids[i] and node_ids[i + 1] are joined by edge_ids[i]."
+                  items_json  = jsonencode({ type = "object" })
                 }
               }
 
@@ -579,6 +600,13 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
                   type       = "array"
                   items_json = jsonencode({ type = "object" })
                 }
+
+                property {
+                  name        = "paths"
+                  type        = "array"
+                  description = "Ordered chains of graph.edges: node_ids[i] and node_ids[i + 1] are joined by edge_ids[i]."
+                  items_json  = jsonencode({ type = "object" })
+                }
               }
 
               property {
@@ -729,6 +757,13 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
                   name       = "edges"
                   type       = "array"
                   items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name        = "paths"
+                  type        = "array"
+                  description = "Ordered chains of graph.edges: node_ids[i] and node_ids[i + 1] are joined by edge_ids[i]."
+                  items_json  = jsonencode({ type = "object" })
                 }
               }
 
@@ -888,6 +923,13 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
                   type       = "array"
                   items_json = jsonencode({ type = "object" })
                 }
+
+                property {
+                  name        = "paths"
+                  type        = "array"
+                  description = "Ordered chains of graph.edges: node_ids[i] and node_ids[i + 1] are joined by edge_ids[i]."
+                  items_json  = jsonencode({ type = "object" })
+                }
               }
 
               property {
@@ -1045,6 +1087,13 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
                   type       = "array"
                   items_json = jsonencode({ type = "object" })
                 }
+
+                property {
+                  name        = "paths"
+                  type        = "array"
+                  description = "Ordered chains of graph.edges: node_ids[i] and node_ids[i + 1] are joined by edge_ids[i]."
+                  items_json  = jsonencode({ type = "object" })
+                }
               }
 
               property {
@@ -1195,6 +1244,13 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
                   name       = "edges"
                   type       = "array"
                   items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name        = "paths"
+                  type        = "array"
+                  description = "Ordered chains of graph.edges: node_ids[i] and node_ids[i + 1] are joined by edge_ids[i]."
+                  items_json  = jsonencode({ type = "object" })
                 }
               }
 

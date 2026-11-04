@@ -47,6 +47,7 @@ DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
 QUERY_MAX_ROWS = 100
 QUERY_MAX_HOPS = 5
+MAX_PATHS = 20
 
 # Default dataset by node label, used when the node itself has no `source` property.
 # Disease nodes are merged from both Monarch and DisMech, so they get no default.
@@ -147,6 +148,12 @@ class Envelope:
         self.request_id = request_id
         self.nodes = {}
         self.edges = {}
+        # Ordered chains of returned edges: [{"node_ids": [...], "edge_ids": [...]}].
+        self.paths = []
+        # Node ids where chains start. A tool opts in to graph.paths by setting this; None lists no paths.
+        self.path_roots = None
+        # True when the tool recorded the paths itself, so none are derived from the edges.
+        self.explicit_paths = False
         self.evidence = {}
         self.observations = []
         self.interpretation = []
@@ -185,6 +192,44 @@ class Envelope:
         })
         return evidence_id
 
+    def add_path(self, node_ids, edge_ids):
+        """Record one ordered chain: node_ids[i] and node_ids[i + 1] are joined by edge_ids[i]."""
+        path = {"node_ids": list(node_ids), "edge_ids": list(edge_ids)}
+        if path not in self.paths:
+            self.paths.append(path)
+
+    def derive_paths(self):
+        """Every longest chain of two or more returned edges that follows edge direction from a root
+        without visiting a node twice. These are chains in the returned graph, not the order in which
+        Neptune evaluated the query. Single edges are not paths: graph.edges already lists them."""
+        outgoing = {}
+        for eid in sorted(self.edges):
+            edge = self.edges[eid]
+            outgoing.setdefault(edge["source"], []).append((eid, edge["target"]))
+        roots = [node_id for node_id in self.path_roots or [] if node_id in self.nodes]
+
+        found, truncated = [], False
+
+        def walk(node_id, node_ids, edge_ids):
+            nonlocal truncated
+            if truncated:
+                return
+            extended = False
+            for eid, target in outgoing.get(node_id, []):
+                if target in node_ids:
+                    continue
+                extended = True
+                walk(target, node_ids + [target], edge_ids + [eid])
+            if not extended and len(edge_ids) >= 2:
+                if len(found) >= MAX_PATHS:
+                    truncated = True
+                    return
+                found.append({"node_ids": node_ids, "edge_ids": edge_ids})
+
+        for root in roots:
+            walk(root, [root], [])
+        return found, truncated
+
     def set_query(self, text, parameters):
         self.query = {"language": "openCypher", "text": _dedent(text), "parameters": parameters}
 
@@ -200,13 +245,19 @@ class Envelope:
             )
         if self._edges_without_evidence:
             self.limit("No evidence reference is recorded for: " + ", ".join(self._edges_without_evidence) + ".")
+        paths = self.paths
+        if not self.explicit_paths and not paths and self.path_roots:
+            paths, truncated = self.derive_paths()
+            if truncated:
+                self.limit(f"More than {MAX_PATHS} paths follow the returned edges; only the first {MAX_PATHS} "
+                           "are listed in graph.paths. graph.edges is complete.")
         envelope = {
             "contract_version": CONTRACT_VERSION,
             "result_type": result_type,
             "summary": summary,
             "observations": self.observations,
             "interpretation": self.interpretation,
-            "graph": {"nodes": list(self.nodes.values()), "edges": list(self.edges.values())},
+            "graph": {"nodes": list(self.nodes.values()), "edges": list(self.edges.values()), "paths": paths},
             "evidence": list(self.evidence.values()),
             "query": self.query,
             "limitations": self.limitations,
@@ -634,6 +685,10 @@ def get_mechanism_paths(session, args, env):
 
     for row in rows:
         add_edge_row(env, row)
+    # Causal chains start at a mechanism that no leads_to edge points into. Starting at the disease would
+    # also list every direct disease-to-mechanism edge as a shortcut into the chain.
+    caused = {r["object_id"] for r in rows if r["kind"] == "leads_to"}
+    env.path_roots = sorted({r["object_id"] for r in rows if r["kind"] == "has_mechanism"} - caused)
 
     if not rows:
         name = _disease_label(session, disease_id)
@@ -896,6 +951,9 @@ def get_gene_disease_association(session, args, env):
     rows.sort(key=lambda r: (r["source"] or "", r["predicate"] or "", r["object_label"] or ""))
     for row in rows:
         add_edge_row(env, row)
+    # The gene and the disease point at each other (Monarch and DisMech disagree on direction), so start
+    # at the disease: it reaches the gene directly and through the subtype that the gene defines.
+    env.path_roots = [disease_id]
 
     disease_name = _disease_label(session, disease_id)
     disease = f"{disease_name} ({disease_id})" if disease_name else disease_id
@@ -1000,6 +1058,8 @@ def get_treatment_evidence(session, args, env):
 
     for row in treatments + agents + targets + shown_genes:
         add_edge_row(env, row)
+    # Chains run disease -> treatment -> agent -> target gene, and disease -> treatment -> mechanism.
+    env.path_roots = [disease_id]
 
     # Show where the targeted mechanism sits in the disease record, so its origin is visible.
     for mechanism_node in sorted({r["object_id"] for r in targets}):
@@ -1086,6 +1146,114 @@ def _to_json(value):
     return str(value)
 
 
+def _walk_graph_values(value, visit):
+    """Call visit on every node, relationship and path inside a result value, however deeply nested."""
+    if isinstance(value, (Node, Relationship, Path)):
+        visit(value)
+    elif isinstance(value, dict):
+        for item in value.values():
+            _walk_graph_values(item, visit)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _walk_graph_values(item, visit)
+
+
+def _graph_node(env, node):
+    """Add a returned node to the graph and give back its id, or None if it has no stable id."""
+    props, labels = dict(node), set(node.labels)
+    node_id = props.get("id")
+    if not node_id:
+        return None  # a node returned without its id property cannot be referred to by an edge
+    kind = next((name for name in sorted(labels) if name != "Entity"), "Entity")
+    dataset = props.get("source") or next((LABEL_DATASET[n] for n in sorted(labels) if n in LABEL_DATASET), UNRECORDED)
+    label = props.get("name") if "Disease" in labels else props.get("label")
+    label = label or props.get("label") or props.get("name") or node_id
+    env.add_node(node_id, label, _category_type(props.get("category"), kind), dataset, props.get("source_version"))
+    return node_id
+
+
+def _graph_edge(env, relationship, known):
+    """Add a returned relationship to the graph and give back its id, or None if an end is not in the result."""
+    start, end = relationship.nodes
+    if start is None or end is None:
+        return None
+    subject = known.get(start.element_id) or dict(start).get("id")
+    obj = known.get(end.element_id) or dict(end).get("id")
+    if subject not in env.nodes or obj not in env.nodes:
+        return None
+    props = dict(relationship)
+    dataset = props.get("source") or UNRECORDED
+    predicate = props.get("predicate") or relationship.type.lower()
+    eid = edge_id(dataset, subject, predicate, obj)
+    if eid in env.edges:
+        return eid
+    version = env.version(dataset, props.get("source_version"))
+    references = ([props["evidence_pmid"]] if props.get("evidence_pmid") else
+                  _as_list(props.get("publications")) or _as_list(props.get("primary_knowledge_source"))
+                  or _as_list(props.get("references")))
+    env.edges[eid] = {
+        "id": eid,
+        "source": subject,
+        "target": obj,
+        "predicate": predicate,
+        "edge_origin": props.get("edge_origin") or "recorded",
+        "source_dataset": dataset,
+        "source_version": version,
+        "evidence_ids": [
+            env.add_evidence(f"{eid}#{reference}", reference, dataset, version, props.get("evidence_snippet"))
+            for reference in references
+        ],
+    }
+    return eid
+
+
+def _collect_graph(env, raw_rows):
+    """Fill graph.nodes, graph.edges and graph.paths from the nodes, relationships and paths a query
+    returned, using the same ids as the named tools. Scalars stay in the table only."""
+    nodes, relationships, paths = [], [], []
+
+    def visit(value):
+        if isinstance(value, Node):
+            nodes.append(value)
+        elif isinstance(value, Relationship):
+            relationships.append(value)
+        else:
+            nodes.extend(value.nodes)
+            relationships.extend(value.relationships)
+            paths.append(value)
+
+    for row in raw_rows:
+        _walk_graph_values(row, visit)
+    if not (nodes or relationships):
+        return
+
+    # A relationship names its ends by element id and may carry no properties, so ends are matched to the
+    # full nodes returned alongside it.
+    known = {}
+    for node in nodes:
+        node_id = _graph_node(env, node)
+        if node_id:
+            known[node.element_id] = node_id
+    skipped = sum(1 for relationship in relationships if _graph_edge(env, relationship, known) is None)
+
+    env.explicit_paths = True  # the query's own paths are listed; none are guessed from the edges
+    for path in paths:
+        node_ids = [known.get(node.element_id) for node in path.nodes]
+        edge_ids = [_graph_edge(env, relationship, known) for relationship in path.relationships]
+        if None in node_ids or None in edge_ids:
+            skipped += 1
+        else:
+            env.add_path(node_ids, edge_ids)
+
+    env.limit("graph holds the nodes, relationships and paths that the query returned, and only those that "
+              "carry an id property. Values returned as plain columns appear in table only.")
+    if any(not dict(node).get("id") for node in nodes):
+        env.limit("Some returned nodes have no id property, so they are in table but not in graph.")
+    if skipped:
+        env.limit(f"{skipped} returned relationship(s) or path(s) are in table but not in graph, because the "
+                  "nodes at their ends were not returned with an id property.")
+
+
 def run_readonly_query(session, args, env):
     text = args.get("query")
     parameters = args.get("parameters") or {}
@@ -1097,14 +1265,16 @@ def run_readonly_query(session, args, env):
     def work(tx):
         result = tx.run(text, parameters)
         columns = list(result.keys())
-        rows = []
+        rows, raw = [], []
         for record in result:
             if len(rows) == QUERY_MAX_ROWS:
-                return columns, rows, True
-            rows.append([_to_json(record[c]) for c in columns])
-        return columns, rows, False
+                return columns, rows, raw, True
+            raw.append([record[c] for c in columns])
+            rows.append([_to_json(value) for value in raw[-1]])
+        return columns, rows, raw, False
 
-    columns, rows, truncated = session.execute_read(work)
+    columns, rows, raw, truncated = session.execute_read(work)
+    _collect_graph(env, raw)
     env.limit("Rows are returned as the query produced them. They carry provenance only if the query "
               "returns source, source_version and evidence properties.")
     if truncated:
@@ -1161,6 +1331,7 @@ def _log_call(tool, args, metadata, context, result, status, error, started):
         "result_type": result["result_type"],
         "nodes": len(result["graph"]["nodes"]),
         "edges": len(result["graph"]["edges"]),
+        "paths": len(result["graph"]["paths"]),
         "rows": len(result["table"]["rows"]) if "table" in result else None,
         "limitations": len(result["limitations"]),
         "error": error,
