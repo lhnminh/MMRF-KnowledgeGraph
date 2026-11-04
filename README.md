@@ -1,6 +1,6 @@
 # MMRF ORION: Workstream 1 Knowledge Graph
 
-A myeloma knowledge graph in Amazon Neptune, exposed to agents as named tools through AgentCore Gateway. Each tool returns where its answer came from, the supporting subgraph, and any limitations. The design decisions are in [docs/adrs](docs/adrs).
+A myeloma knowledge graph in Amazon Neptune, exposed to agents as named tools through AgentCore Gateway. Each tool returns where its answer came from, the supporting subgraph, and any limitations. The design decisions are in [docs/adrs](docs/adrs), the current infrastructure diagram is in [docs/architecture.md](docs/architecture.md), and the rationale and alternatives for every major technology choice are in [docs/technology-choices.md](docs/technology-choices.md).
 
 No real patient data, customer credentials, or customer infrastructure is needed.
 

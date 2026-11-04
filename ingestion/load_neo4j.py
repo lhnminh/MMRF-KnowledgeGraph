@@ -10,10 +10,12 @@ import argparse
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 import yaml
 from neo4j import GraphDatabase
+from neo4j.exceptions import DriverError, Neo4jError
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "raw"
 NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
@@ -303,6 +305,22 @@ def write_association(
     )
 
 
+WRITE_RETRY_ATTEMPTS = 3
+WRITE_RETRY_BASE_DELAY_SECONDS = 1.0
+
+
+def _execute_write_with_retry(session, work, *args):
+    """Retry a whole execute_write call, not just the driver's own per-transaction retry.
+    Safe: load_monarch/load_dismech are all MERGEs, so rerunning one doesn't duplicate writes."""
+    for attempt in range(1, WRITE_RETRY_ATTEMPTS + 1):
+        try:
+            return session.execute_write(work, *args)
+        except (DriverError, Neo4jError):
+            if attempt == WRITE_RETRY_ATTEMPTS:
+                raise
+            time.sleep(WRITE_RETRY_BASE_DELAY_SECONDS * attempt)
+
+
 def load_graph(driver, monarch_text: str, dismech_text: str, provenance_text: str) -> dict:
     """Load one Monarch file and one DisMech record. Safe to rerun: every write is a MERGE."""
     return load_graphs(driver, [(monarch_text, dismech_text, provenance_text)])
@@ -316,9 +334,9 @@ def load_graphs(driver, sources: list[tuple[str, str, str]]) -> dict:
     monarch_versions, dismech_versions = set(), set()
     with driver.session() as session:
         for monarch, dismech, monarch_version, dismech_version in parsed:
-            session.execute_write(load_monarch, monarch, monarch_version)
+            _execute_write_with_retry(session, load_monarch, monarch, monarch_version)
             monarch_versions.add(monarch_version)
-            session.execute_write(load_dismech, dismech, dismech_version)
+            _execute_write_with_retry(session, load_dismech, dismech, dismech_version)
             dismech_versions.add(dismech_version)
         nodes = session.execute_read(lambda tx: tx.run("MATCH (n) RETURN count(n) AS c").single()["c"])
         edges = session.execute_read(lambda tx: tx.run("MATCH ()-[r]->() RETURN count(r) AS c").single()["c"])

@@ -263,13 +263,16 @@ def parse_edge_id(value):
 
 # Every edge query returns the same columns so one function turns rows into envelope parts.
 ASSOCIATION_COLUMNS = """
-    'association' AS kind, d.id AS subject_id, d.name AS subject_label, 'Disease' AS subject_type,
+    'association' AS kind, d.id AS subject_id, coalesce(d.name, d.label) AS subject_label,
+    coalesce(d.category, 'Disease') AS subject_type,
     null AS subject_description, r.predicate AS predicate,
-    o.id AS object_id, o.label AS object_label, o.category AS object_type, r.description AS object_description,
+    o.id AS object_id, coalesce(o.label, o.name) AS object_label, o.category AS object_type,
+    r.description AS object_description,
     r.evidence_pmid AS pmid, r.evidence_snippet AS snippet, r.dismech_explanation AS explanation,
     r.publications AS publications, r.primary_knowledge_source AS primary_knowledge_source,
     r.frequency AS frequency, r.record_name AS record_name, r.association_type AS association_type,
-    r.source AS source, r.source_version AS source_version, r.edge_origin AS edge_origin
+    r.source AS source, r.source_version AS source_version, r.edge_origin AS edge_origin,
+    null AS effect, null AS edge_description
 """
 
 LEADS_TO_COLUMNS = """
@@ -279,7 +282,8 @@ LEADS_TO_COLUMNS = """
     r.evidence_pmid AS pmid, r.evidence_snippet AS snippet, r.dismech_explanation AS explanation,
     null AS publications, null AS primary_knowledge_source,
     null AS frequency, null AS record_name, null AS association_type,
-    r.source AS source, r.source_version AS source_version, r.edge_origin AS edge_origin
+    r.source AS source, r.source_version AS source_version, r.edge_origin AS edge_origin,
+    null AS effect, null AS edge_description
 """
 
 HAS_MECHANISM_COLUMNS = """
@@ -289,8 +293,49 @@ HAS_MECHANISM_COLUMNS = """
     h.evidence_pmid AS pmid, h.evidence_snippet AS snippet, h.dismech_explanation AS explanation,
     null AS publications, null AS primary_knowledge_source,
     null AS frequency, null AS record_name, null AS association_type,
-    h.source AS source, h.source_version AS source_version, h.edge_origin AS edge_origin
+    h.source AS source, h.source_version AS source_version, h.edge_origin AS edge_origin,
+    null AS effect, null AS edge_description
 """
+
+
+# A subtype defined by a driver gene (DisMech genetic factor with a subtype). Structural: no evidence of its own.
+DRIVER_GENE_COLUMNS = """
+    'driver_gene' AS kind, s.id AS subject_id, s.label AS subject_label, s.category AS subject_type,
+    null AS subject_description, 'has_driver_gene' AS predicate,
+    g.id AS object_id, g.label AS object_label, g.category AS object_type, null AS object_description,
+    null AS pmid, null AS snippet, null AS explanation,
+    null AS publications, null AS primary_knowledge_source,
+    null AS frequency, null AS record_name, r.association_type AS association_type,
+    r.source AS source, r.source_version AS source_version, r.edge_origin AS edge_origin,
+    null AS effect, null AS edge_description
+"""
+
+# A treatment linked to the agent it uses. Structural: no evidence of its own.
+AGENT_COLUMNS = """
+    'has_agent' AS kind, t.id AS subject_id, t.label AS subject_label, t.category AS subject_type,
+    null AS subject_description, 'has_agent' AS predicate,
+    a.id AS object_id, a.label AS object_label, a.category AS object_type, null AS object_description,
+    null AS pmid, null AS snippet, null AS explanation,
+    null AS publications, null AS primary_knowledge_source,
+    null AS frequency, null AS record_name, null AS association_type,
+    r.source AS source, r.source_version AS source_version, r.edge_origin AS edge_origin,
+    null AS effect, null AS edge_description
+"""
+
+# A treatment and the mechanism it acts on, with that edge's own evidence and commentary.
+TARGETS_COLUMNS = """
+    'targets_mechanism' AS kind, t.id AS subject_id, t.label AS subject_label, t.category AS subject_type,
+    null AS subject_description, 'targets_mechanism' AS predicate,
+    m.name AS object_id, m.name AS object_label, 'Mechanism' AS object_type, m.description AS object_description,
+    r.evidence_pmid AS pmid, r.evidence_snippet AS snippet, r.dismech_explanation AS explanation,
+    null AS publications, null AS primary_knowledge_source,
+    null AS frequency, null AS record_name, null AS association_type,
+    r.source AS source, r.source_version AS source_version, r.edge_origin AS edge_origin,
+    r.treatment_effect AS effect, r.description AS edge_description
+"""
+
+# Structural links that carry no evidence of their own; their absence is not reported as a gap.
+STRUCTURAL_KINDS = ("driver_gene", "has_agent")
 
 
 def add_edge_row(env, row):
@@ -365,6 +410,28 @@ def add_edge_row(env, row):
                 "basis": "source_curator_commentary",
                 "refs": evidence_ids,
             })
+    elif kind == "driver_gene":
+        how = f" ({row['association_type']})" if row["association_type"] else ""
+        env.observations.append({
+            "text": f"DisMech records {row['subject_label']} as defined by a driver alteration in "
+                    f"{row['object_label']}{how}.",
+            "refs": evidence_ids,
+        })
+    elif kind == "has_agent":
+        env.observations.append({
+            "text": f"DisMech records {row['object_label']} as the agent of {row['subject_label']}.",
+            "refs": evidence_ids,
+        })
+    elif kind == "targets_mechanism":
+        effect = (row.get("effect") or "targets").lower().replace("_", " ")
+        env.observations.append({
+            "text": f"DisMech records that {row['subject_label']} {effect} {row['object_label']}.",
+            "refs": evidence_ids,
+        })
+        # Both are curator wording about why the link holds, so neither is an observation.
+        for text in (row.get("edge_description"), row["explanation"]):
+            if text:
+                env.interpretation.append({"text": text, "basis": "source_curator_commentary", "refs": evidence_ids})
     else:
         source_name = DATASET_NAMES.get(dataset, dataset)
         details = ""
@@ -397,7 +464,7 @@ def add_edge_row(env, row):
                 "refs": evidence_ids,
             })
 
-    if not evidence_ids:
+    if not evidence_ids and kind not in STRUCTURAL_KINDS:
         env._edges_without_evidence.append(eid)
     return eid
 
@@ -584,9 +651,28 @@ def get_evidence(session, args, env):
                 RETURN {HAS_MECHANISM_COLUMNS}
             """
             parameters = {"subject": subject, "object": obj}
-        else:
+        elif predicate == "has_driver_gene":
             query = f"""
-                MATCH (d:Disease {{id: $subject}})-[r:ASSOCIATION {{predicate: $predicate, source: $dataset}}]->(o {{id: $object}})
+                MATCH (s:Entity {{id: $subject}})-[r:HAS_DRIVER_GENE]->(g:Entity {{id: $object}})
+                RETURN {DRIVER_GENE_COLUMNS}
+            """
+            parameters = {"subject": subject, "object": obj}
+        elif predicate == "has_agent":
+            query = f"""
+                MATCH (t:Entity {{id: $subject}})-[r:HAS_AGENT]->(a:Entity {{id: $object}})
+                RETURN {AGENT_COLUMNS}
+            """
+            parameters = {"subject": subject, "object": obj}
+        elif predicate == "targets_mechanism":
+            query = f"""
+                MATCH (t:Entity {{id: $subject}})-[r:TARGETS_MECHANISM]->(m:Mechanism {{name: $object}})
+                RETURN {TARGETS_COLUMNS}
+            """
+            parameters = {"subject": subject, "object": obj}
+        else:
+            # The subject is a disease for most edges, but a gene for Monarch gene-to-disease associations.
+            query = f"""
+                MATCH (d {{id: $subject}})-[r:ASSOCIATION {{predicate: $predicate, source: $dataset}}]->(o {{id: $object}})
                 RETURN {ASSOCIATION_COLUMNS}
             """
             parameters = {"subject": subject, "predicate": predicate, "object": obj, "dataset": dataset}
@@ -611,9 +697,13 @@ def get_evidence(session, args, env):
         WHERE h.evidence_pmid = $reference
         RETURN {HAS_MECHANISM_COLUMNS}
         UNION ALL
-        MATCH (d:Disease)-[r:ASSOCIATION]->(o)
+        MATCH (d)-[r:ASSOCIATION]->(o)
         WHERE r.evidence_pmid = $reference OR r.primary_knowledge_source = $reference OR r.publications IS NOT NULL
         RETURN {ASSOCIATION_COLUMNS}
+        UNION ALL
+        MATCH (t:Entity)-[r:TARGETS_MECHANISM]->(m:Mechanism)
+        WHERE r.evidence_pmid = $reference
+        RETURN {TARGETS_COLUMNS}
     """
     parameters = {"reference": reference}
     env.set_query(query, parameters)
@@ -629,6 +719,233 @@ def get_evidence(session, args, env):
         env.limit(f"No edge citing {reference} is recorded in the loaded graph.")
         return env.build("graph", f"No edges cite {reference}.")
     return env.build("graph", f"{len(env.edges)} edge(s) in the loaded graph cite {reference}.")
+
+
+# ------------------------------------- gene, gene-disease and treatment tools
+
+NOT_LOADED = "Open Targets and CIViC are not loaded in this graph, so they are not covered."
+
+
+def _resolve_gene(session, value):
+    """(id, label) of a human gene node from an HGNC id or an approved symbol, or None.
+
+    Symbols only resolve to HGNC ids, so a mouse or other-species gene with the same name is never returned."""
+    if re.fullmatch(r"HGNC:\d+", value, re.I):
+        rows = _read(session, "MATCH (g:Entity {id: $id}) RETURN g.id AS id, g.label AS label", {"id": value.upper()})
+    else:
+        rows = _read(
+            session,
+            "MATCH (g:Entity) WHERE g.id STARTS WITH 'HGNC:' AND toLower(g.label) = toLower($symbol) "
+            "RETURN g.id AS id, g.label AS label ORDER BY id",
+            {"symbol": value},
+        )
+    return (rows[0]["id"], rows[0]["label"]) if rows else None
+
+
+def _gene_not_found(env, gene):
+    env.limit(f"No human gene node matching '{gene}' (an HGNC id such as HGNC:6407, or an approved symbol) is "
+              "recorded in the loaded graph. A gene is present only if a loaded Monarch or DisMech record names it.")
+    return env.build("graph", f"No gene recorded for {gene}.")
+
+
+def get_gene_context(session, args, env):
+    gene = _required(args, "gene")
+    limit = _limit_arg(args)
+    resolved = _resolve_gene(session, gene)
+    if resolved is None:
+        return _gene_not_found(env, gene)
+    gene_id, gene_label = resolved
+
+    query = f"""
+        MATCH (d)-[r:ASSOCIATION]->(o)
+        WHERE d.id = $gene_id
+        RETURN {ASSOCIATION_COLUMNS}
+        UNION ALL
+        MATCH (d)-[r:ASSOCIATION]->(o)
+        WHERE o.id = $gene_id
+        RETURN {ASSOCIATION_COLUMNS}
+        UNION ALL
+        MATCH (s:Entity)-[r:HAS_DRIVER_GENE]->(g:Entity)
+        WHERE g.id = $gene_id
+        RETURN {DRIVER_GENE_COLUMNS}
+    """
+    parameters = {"gene_id": gene_id}
+    env.set_query(query, parameters)
+    rows = _read(session, query, parameters)
+    rows.sort(key=lambda r: (r["source"] or "", r["predicate"] or "", r["object_label"] or ""))
+    shown = rows[:limit]
+    for row in shown:
+        add_edge_row(env, row)
+
+    counts = {dataset: sum(1 for r in shown if r["source"] == dataset) for dataset in DATASET_NAMES}
+    for dataset, count in counts.items():
+        if count == 0:
+            env.limit(f"{DATASET_NAMES[dataset]}: no record of {gene_label} ({gene_id}) is recorded in the loaded "
+                      "graph (none recorded).")
+    env.limit(NOT_LOADED)
+    env.limit("Edges exist only for the diseases and genes that were loaded from each source, so 'none recorded' "
+              "does not mean the source holds no record for this gene.")
+    if len(rows) > limit:
+        env.limit(f"More than {limit} edges are recorded for {gene_label}; only the first {limit} are returned.")
+    return env.build("graph", f"{gene_label} ({gene_id}): {len(shown)} recorded edge(s), {counts['monarch']} from "
+                              f"Monarch and {counts['dismech']} from DisMech.")
+
+
+def get_gene_disease_association(session, args, env):
+    gene = _required(args, "gene")
+    disease_id = _required(args, "disease_id")
+    variant = args.get("variant")
+    if variant is not None and (not isinstance(variant, str) or not variant.strip()):
+        raise ToolInputError("variant must be a non-empty string")
+    variant = variant.strip() if variant else None
+
+    resolved = _resolve_gene(session, gene)
+    if resolved is None:
+        return _gene_not_found(env, gene)
+    gene_id, gene_label = resolved
+
+    # Monarch stores the gene as subject; DisMech stores the disease as subject. Both are read, and the
+    # subtype that the gene defines (with its driver-gene link) shows where within the disease it sits.
+    query = f"""
+        MATCH (d)-[r:ASSOCIATION]->(o)
+        WHERE d.id = $gene_id AND o.id = $disease_id
+        RETURN {ASSOCIATION_COLUMNS}
+        UNION ALL
+        MATCH (d)-[r:ASSOCIATION]->(o)
+        WHERE d.id = $disease_id AND o.id = $gene_id
+        RETURN {ASSOCIATION_COLUMNS}
+        UNION ALL
+        MATCH (d {{id: $disease_id}})-[r:ASSOCIATION {{predicate: 'dismech:has_subtype'}}]->(o)-[:HAS_DRIVER_GENE]->(g:Entity {{id: $gene_id}})
+        RETURN {ASSOCIATION_COLUMNS}
+        UNION ALL
+        MATCH (d {{id: $disease_id}})-[:ASSOCIATION {{predicate: 'dismech:has_subtype'}}]->(s)-[r:HAS_DRIVER_GENE]->(g:Entity {{id: $gene_id}})
+        RETURN {DRIVER_GENE_COLUMNS}
+    """
+    parameters = {"gene_id": gene_id, "disease_id": disease_id}
+    env.set_query(query, parameters)
+    rows = _read(session, query, parameters)
+    rows.sort(key=lambda r: (r["source"] or "", r["predicate"] or "", r["object_label"] or ""))
+    for row in rows:
+        add_edge_row(env, row)
+
+    disease_name = _disease_label(session, disease_id)
+    disease = f"{disease_name} ({disease_id})" if disease_name else disease_id
+    if disease_name is None:
+        env.limit(f"No Disease node with id {disease_id} is in the loaded graph.")
+
+    monarch = [r for r in rows if r["source"] == "monarch"]
+    factors = [r for r in rows if r["predicate"] == "dismech:has_genetic_factor"]
+    subtypes = [r for r in rows if r["predicate"] == "dismech:has_subtype"]
+    if not monarch:
+        env.limit(f"Monarch: no association between {gene_label} ({gene_id}) and {disease} is recorded in the "
+                  "loaded graph (none recorded).")
+    else:
+        env.limit(f"The Monarch association links the gene {gene_label} ({gene_id}) to the disease. It is recorded "
+                  "at gene level and does not say which variants are involved.")
+    if not factors:
+        env.limit(f"DisMech: no genetic factor linking {gene_label} ({gene_id}) to {disease} is recorded in the "
+                  "loaded graph (none recorded).")
+    if not subtypes:
+        env.limit(f"DisMech: no subtype of {disease} is recorded as defined by {gene_label} (none recorded).")
+    env.limit(NOT_LOADED)
+
+    if variant:
+        found = _read(
+            session,
+            "MATCH (n) WHERE toLower(coalesce(n.label, n.name, '')) CONTAINS toLower($variant) AND n.id <> $gene_id "
+            "RETURN n.id AS id, coalesce(n.label, n.name) AS label LIMIT 5",
+            {"variant": variant, "gene_id": gene_id},
+        )
+        if found:
+            env.limit(f"Entities whose name contains '{variant}': "
+                      + ", ".join(f"{r['label']} ({r['id']})" for r in found)
+                      + ". This tool does not follow variant-level links, so none is reported as an association.")
+        else:
+            env.limit(f"Requested specificity: variant '{variant}'. No variant-level record matching it is in the "
+                      f"loaded graph, so the association is reported at gene level: {gene_label} ({gene_id}). "
+                      f"It links the gene to the disease and is not evidence about '{variant}' itself.")
+
+    return env.build("graph", f"{gene_label} ({gene_id}) and {disease}: {len(monarch)} Monarch association(s), "
+                              f"{len(factors)} DisMech genetic factor(s), {len(subtypes)} DisMech subtype(s).")
+
+
+def get_treatment_evidence(session, args, env):
+    disease_id = _required(args, "disease_id")
+    treatment, mechanism = args.get("treatment"), args.get("mechanism")
+    for name, value in (("treatment", treatment), ("mechanism", mechanism)):
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ToolInputError(f"{name} must be a non-empty string")
+    treatment = treatment.strip().lower() if treatment else None
+    mechanism = mechanism.strip().lower() if mechanism else None
+
+    recorded = "{predicate: 'dismech:has_recorded_treatment'}"
+    query = f"""
+        MATCH (d {{id: $disease_id}})-[r:ASSOCIATION {recorded}]->(o)
+        RETURN {ASSOCIATION_COLUMNS}
+        UNION ALL
+        MATCH (d {{id: $disease_id}})-[:ASSOCIATION {recorded}]->(t)-[r:HAS_AGENT]->(a)
+        RETURN {AGENT_COLUMNS}
+        UNION ALL
+        MATCH (d {{id: $disease_id}})-[:ASSOCIATION {recorded}]->(t)-[r:TARGETS_MECHANISM]->(m:Mechanism)
+        RETURN {TARGETS_COLUMNS}
+    """
+    parameters = {"disease_id": disease_id}
+    env.set_query(query, parameters)
+    rows = _read(session, query, parameters)
+    treatments = [r for r in rows if r["kind"] == "association"]
+    agents = [r for r in rows if r["kind"] == "has_agent"]
+    targets = [r for r in rows if r["kind"] == "targets_mechanism"]
+
+    kept = {r["object_id"] for r in treatments if not treatment or treatment in (r["object_label"] or "").lower()}
+    if treatment:
+        kept |= {r["subject_id"] for r in agents if treatment in (r["object_label"] or "").lower()}
+    if mechanism:
+        targets = [r for r in targets if mechanism in (r["object_label"] or "").lower()]
+        kept &= {r["subject_id"] for r in targets}
+    treatments = [r for r in treatments if r["object_id"] in kept]
+    agents = [r for r in agents if r["subject_id"] in kept]
+    targets = [r for r in targets if r["subject_id"] in kept]
+
+    if not treatments:
+        name = _disease_label(session, disease_id)
+        env.limit(
+            f"No Disease node with id {disease_id} is in the loaded graph." if name is None else
+            f"No recorded treatment{' matching the filters' if treatment or mechanism else ''} is recorded for "
+            f"{name} ({disease_id}) in the loaded data (none recorded)."
+        )
+        return env.build("graph", f"No recorded treatments for {disease_id}.")
+
+    for row in treatments + agents + targets:
+        add_edge_row(env, row)
+
+    # Show where the targeted mechanism sits in the disease record, so its origin is visible.
+    for mechanism_name in sorted({r["object_id"] for r in targets}):
+        context = _read(
+            session,
+            f"MATCH (d:Disease {{id: $disease_id}})-[h:HAS_MECHANISM]->(a:Mechanism {{name: $name}}) "
+            f"RETURN {HAS_MECHANISM_COLUMNS}",
+            {"disease_id": disease_id, "name": mechanism_name},
+        )
+        for row in context:
+            add_edge_row(env, row)
+
+    untargeted = sorted({r["object_label"] for r in treatments} - {r["subject_label"] for r in targets})
+    if untargeted:
+        env.limit("No treatment-to-mechanism edge is recorded for: " + ", ".join(untargeted) + ".")
+    no_target = []
+    for agent in agents:
+        outgoing = _read(session, "MATCH (a:Entity {id: $id})-[r]->(x) RETURN count(r) AS c", {"id": agent["object_id"]})
+        if not outgoing or outgoing[0]["c"] == 0:
+            no_target.append(agent["object_label"])
+    if no_target:
+        env.limit("No molecular target (for example a gene or protein) is recorded for: " + ", ".join(sorted(set(no_target)))
+                  + " (none recorded). A target named only in a description or evidence snippet is text, not a "
+                  "recorded edge.")
+    if any(item["snippet"] for item in env.evidence.values()):
+        env.limit("Trial population and result appear only as the quoted evidence snippet; the graph has no "
+                  "structured fields for them, and any count or rate must be read from the quoted text.")
+    return env.build("graph", f"{len(treatments)} recorded treatment(s) for {treatments[0]['subject_label']} "
+                              f"({disease_id}), {len(targets)} linked to a targeted mechanism.")
 
 
 # --------------------------------------------------- guarded read-only query
@@ -717,6 +1034,9 @@ TOOLS = {
     "kg_get_phenotypes": get_phenotypes,
     "kg_get_mechanism_paths": get_mechanism_paths,
     "kg_get_evidence": get_evidence,
+    "kg_get_gene_context": get_gene_context,
+    "kg_get_gene_disease_association": get_gene_disease_association,
+    "kg_get_treatment_evidence": get_treatment_evidence,
     "kg_run_readonly_query": run_readonly_query,
 }
 
