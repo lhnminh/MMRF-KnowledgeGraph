@@ -9,11 +9,27 @@ resource "aws_s3_bucket" "ingest" {
 }
 
 # The VPC has no internet route, so this is how the Lambda reaches S3. Gateway endpoints are free.
+# The policy also allows the existing kg-external snapshot bucket so this doesn't regress that path.
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.kg.id
   service_name      = "com.amazonaws.${var.region}.s3"
   vpc_endpoint_type = "Gateway"
   route_table_ids   = [aws_route_table.kg_private.id]
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = "*"
+      Action    = ["s3:ListBucket", "s3:GetObject"]
+      Resource = [
+        aws_s3_bucket.ingest.arn,
+        "${aws_s3_bucket.ingest.arn}/raw/*",
+        "arn:aws:s3:::mmrf-kg-ingest-graph-625cdaede0eaa28bd93d4b6b7f",
+        "arn:aws:s3:::mmrf-kg-ingest-graph-625cdaede0eaa28bd93d4b6b7f/graph/*",
+      ]
+    }]
+  })
 }
 
 resource "aws_security_group" "ingest_lambda" {

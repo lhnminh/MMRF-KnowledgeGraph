@@ -128,6 +128,8 @@ cat response.json
 
 The response reports the graph's node and relationship counts and the versions loaded. To load the same files into local Neo4j instead, run `uv run python ingestion/load_neo4j.py` (or `docker compose up -d neo4j` first if it isn't running).
 
+Neptune negotiates Bolt protocol 3, which allows only one open result per transaction; `load_neo4j.py` relies on the driver's own buffering between `tx.run()` calls and must not call `.consume()` on a result before the next one runs, or the driver raises `ResultConsumedError`.
+
 Open Targets and CIViC are not loaded into Neptune yet. The ETL above can export them, but they total about 12 MB, so when they are needed, revisit whether row-by-row writes are enough or the Neptune bulk loader is the better fit.
 
 ## Tests

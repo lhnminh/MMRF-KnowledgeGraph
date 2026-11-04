@@ -41,7 +41,7 @@ def load_monarch(tx, monarch: dict, version: str) -> None:
         "MERGE (d:Disease {id: $id}) SET d.name = $name",
         id=entity["id"],
         name=entity["name"],
-    ).consume()
+    )
     for assoc in monarch["associations"]:
         # A disease stays one node whichever end of an edge it appears on. The label comes from
         # this fixed choice, never from the data, because Cypher cannot parameterize labels.
@@ -72,12 +72,12 @@ def load_monarch(tx, monarch: dict, version: str) -> None:
             # A delimited string, because Neptune openCypher has no list-valued properties.
             publications=";".join(assoc.get("publications") or []),
             version=version,
-        ).consume()
+        )
 
 
 def load_dismech(tx, dismech: dict, version: str) -> None:
     disease_id = dismech["disease_term"]["term"]["id"]
-    tx.run("MERGE (d:Disease {id: $id}) SET d.name = $name", id=disease_id, name=dismech["name"]).consume()
+    tx.run("MERGE (d:Disease {id: $id}) SET d.name = $name", id=disease_id, name=dismech["name"])
 
     for step in dismech["pathophysiology"]:
         tx.run(
@@ -92,7 +92,7 @@ def load_dismech(tx, dismech: dict, version: str) -> None:
             description=step.get("description"),
             disease_id=disease_id,
             version=version,
-        ).consume()
+        )
         for downstream in step.get("downstream", []):
             evidence = (downstream.get("evidence") or [{}])[0]
             tx.run(
@@ -113,7 +113,7 @@ def load_dismech(tx, dismech: dict, version: str) -> None:
                 snippet=evidence.get("snippet"),
                 explanation=evidence.get("explanation"),
                 version=version,
-            ).consume()
+            )
 
 
 def load_graph(driver, monarch_text: str, dismech_text: str, provenance_text: str) -> dict:
