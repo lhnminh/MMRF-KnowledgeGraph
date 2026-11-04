@@ -189,3 +189,23 @@ resource "aws_cloudwatch_log_delivery" "kg_gateway" {
   delivery_source_name     = aws_cloudwatch_log_delivery_source.kg_gateway.name
   delivery_destination_arn = aws_cloudwatch_log_delivery_destination.kg_gateway.arn
 }
+
+# Lets Workstream 2's orchestrator agent call this Gateway. The role is theirs, created outside
+# this stack; the data source just looks it up so our policy can attach to it.
+data "aws_iam_role" "smoke_agent_runtime" {
+  name = "mmrf-smoke-agent-runtime"
+}
+
+resource "aws_iam_role_policy" "smoke_agent_invoke_kg_gateway" {
+  name = "invoke-kg-gateway"
+  role = data.aws_iam_role.smoke_agent_runtime.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "bedrock-agentcore:InvokeGateway"
+      Resource = aws_bedrockagentcore_gateway.kg.gateway_arn
+    }]
+  })
+}
