@@ -144,15 +144,12 @@ class RoutedSession(FakeSession):
         return [FakeRecord(r) for r in self.responder(query, parameters)]
 
 
-def respond(main_rows=(), gene=("HGNC:6407", "KRAS"), disease=("Juvenile Myelomonocytic Leukemia",), outgoing=0,
-            variants=()):
+def respond(main_rows=(), gene=("HGNC:6407", "KRAS"), disease=("Juvenile Myelomonocytic Leukemia",), variants=()):
     def responder(query, _parameters):
         if "g.label AS label" in query:
             return [{"id": gene[0], "label": gene[1]}] if gene else []
         if "d.name AS name" in query:
             return [{"name": disease[0]}] if disease else []
-        if "count(r) AS c" in query:
-            return [{"c": outgoing}]
         if "CONTAINS toLower($variant)" in query:
             return list(variants)
         if "UNION ALL" in query:
@@ -194,7 +191,7 @@ def test_gene_context_states_none_recorded_per_loaded_source_and_names_the_unloa
     assert envelope["graph"]["edges"][0]["id"] == f"monarch:HGNC:6407|biolink:gene_associated_with_condition|{JMML}"
     assert has_note(envelope, "DisMech: no record of KRAS (HGNC:6407)")
     assert not has_note(envelope, "Monarch: no record")
-    assert has_note(envelope, "Open Targets and CIViC are not loaded")
+    assert has_note(envelope, "CIViC is not loaded. Open Targets is loaded only for the targets of drugs")
 
 
 def test_gene_level_association_reports_the_change_in_specificity_for_a_variant():
@@ -295,5 +292,120 @@ def test_every_union_part_returns_the_same_columns():
         return [part.strip().split(" AS ")[-1] for part in sql.replace("\n", " ").split(",") if " AS " in part]
 
     sets = [handler.ASSOCIATION_COLUMNS, handler.LEADS_TO_COLUMNS, handler.HAS_MECHANISM_COLUMNS,
-            handler.DRIVER_GENE_COLUMNS, handler.AGENT_COLUMNS, handler.TARGETS_COLUMNS]
+            handler.DRIVER_GENE_COLUMNS, handler.AGENT_COLUMNS, handler.TARGETS_COLUMNS,
+            handler.TARGETS_GENE_COLUMNS, handler.OUTCOME_COLUMNS]
     assert all(columns(s) == columns(sets[0]) for s in sets)
+
+
+def target_row(agent, symbol, number, action="INHIBITOR", moa="Dual specificity kinase inhibitor"):
+    return row(
+        "targets_gene", f"CHEBI:{agent}", f"HGNC:{number}", subject_type="biolink:Drug", subject_label="trametinib",
+        object_type="biolink:Gene", object_label=symbol, predicate="targets_gene", pmid=None, snippet=None,
+        publications="FDA:label/a.pdf;FDA:label/b.pdf", record_name=moa, association_type=action,
+        source="opentargets", source_version="26.09",
+    )
+
+
+def test_a_drug_target_is_open_targets_record_with_its_label_references_and_version():
+    gene_rows = [target_row("75998", "MAP2K1", 6840), target_row("75998", "MAP2K2", 6842)]
+    envelope, _ = run_tool(handler.get_treatment_evidence, {"disease_id": JMML, "treatment": "trametinib"},
+                           respond(TRAMETINIB_ROWS + gene_rows))
+    observations = [o["text"] for o in envelope["observations"] if o["text"].startswith("Open Targets")]
+    assert observations[0].startswith("Open Targets records trametinib as inhibitor of MAP2K1 (HGNC:6840)")
+    edge = next(e for e in envelope["graph"]["edges"] if e["predicate"] == "targets_gene")
+    assert edge["source_dataset"] == "opentargets" and edge["source_version"] == "26.09"
+    assert edge["id"] == "opentargets:CHEBI:75998|targets_gene|HGNC:6840"
+    assert {"FDA:label/a.pdf", "FDA:label/b.pdf"} <= {e["reference"] for e in envelope["evidence"]}
+    assert not has_note(envelope, "No molecular target")
+    assert has_note(envelope, "not part of the DisMech disease record")
+
+
+def test_agents_without_a_drug_target_are_still_reported():
+    other = row("has_agent", "dismech:treatment:Trametinib", "CHEBI:2038", subject_type="biolink:Treatment",
+                subject_label="Trametinib", object_type="biolink:Drug", object_label="azacitidine",
+                predicate="has_agent", pmid=None, snippet=None)
+    envelope, _ = run_tool(handler.get_treatment_evidence, {"disease_id": JMML},
+                           respond(TRAMETINIB_ROWS + [other, target_row("75998", "MAP2K1", 6840)]))
+    assert has_note(envelope, "No molecular target (for example a gene or protein) is recorded for: azacitidine")
+
+
+def test_a_very_long_target_list_is_capped_and_the_cut_is_stated():
+    many = [target_row("52717", f"PSM{i:02d}", 9000 + i) for i in range(25)]
+    agent = row("has_agent", "dismech:treatment:Trametinib", "CHEBI:52717", subject_type="biolink:Treatment",
+                subject_label="Trametinib", object_type="biolink:Drug", object_label="trametinib",
+                predicate="has_agent", pmid=None, snippet=None)
+    many_rows = [r for r in many]
+    envelope, _ = run_tool(handler.get_treatment_evidence, {"disease_id": JMML},
+                           respond(TRAMETINIB_ROWS[:1] + [agent] + many_rows))
+    shown = [e for e in envelope["graph"]["edges"] if e["predicate"] == "targets_gene"]
+    assert len(shown) == handler.MAX_TARGETS_PER_AGENT
+    assert has_note(envelope, f"trametinib has 25 recorded targets; only the first {handler.MAX_TARGETS_PER_AGENT}")
+
+
+def test_gene_context_counts_open_targets_without_reporting_it_as_missing():
+    envelope, _ = run_tool(handler.get_gene_context, {"gene": "MAP2K1"},
+                           respond([target_row("75998", "MAP2K1", 6840)], gene=("HGNC:6840", "MAP2K1")))
+    assert "1 from Open Targets" in envelope["summary"]
+    assert has_note(envelope, "Monarch: no record of MAP2K1") and has_note(envelope, "DisMech: no record of MAP2K1")
+    assert not has_note(envelope, "Open Targets: no record")
+
+
+def test_evidence_lookup_accepts_a_drug_target_edge_id():
+    _, session = run_tool(handler.get_evidence, {"edge_id": "opentargets:CHEBI:75998|targets_gene|HGNC:6840"},
+                          lambda *_: [])
+    assert "TARGETS_GENE" in session.queries[0]
+
+
+STEP = "dismech:mechanism:MONDO:0011908:Myelomonocytic Progenitor Expansion"
+
+
+def outcome_row(label, object_id):
+    return row("leads_to_phenotype", STEP, object_id, subject_label="Myelomonocytic Progenitor Expansion",
+               object_type="biolink:PhenotypicFeature", object_label=label, predicate="leads_to_phenotype")
+
+
+def test_a_mechanism_to_phenotype_edge_is_reported_and_counted_as_a_link():
+    rows = [
+        row("has_mechanism", JMML, STEP, subject_type="Disease", subject_label="JMML",
+            object_label="Myelomonocytic Progenitor Expansion"),
+        outcome_row("Anemia", "HP:0001903"),
+    ]
+    envelope, _ = run_tool(handler.get_mechanism_paths, {"disease_id": JMML}, respond(rows))
+    edge = next(e for e in envelope["graph"]["edges"] if e["predicate"] == "leads_to_phenotype")
+    assert edge["source"] == STEP and edge["target"] == "HP:0001903"  # node ids are the stored ids
+    assert "1 edges to a downstream phenotype" in envelope["summary"]
+    assert any("leads to Anemia" in o["text"] for o in envelope["observations"])
+    assert not has_note(envelope, "No causal (leads_to) edge is recorded into or out of")  # it has an outgoing edge
+
+
+def test_retired_stubs_without_an_id_are_never_returned_by_search():
+    def responder(query, _parameters):
+        return [
+            {"labels": ["Mechanism"], "id": "dismech:mechanism:MONDO:1:Anemia", "label": "Anemia", "category": None,
+             "description": None, "source": "dismech", "source_version": "v1"},
+            {"labels": ["Mechanism"], "id": None, "label": "Anemia", "category": None,
+             "description": None, "source": None, "source_version": None},
+        ]
+
+    envelope, _ = run_tool(handler.search_entities, {"text": "anemia"}, responder)
+    assert [n["id"] for n in envelope["graph"]["nodes"]] == ["dismech:mechanism:MONDO:1:Anemia"]
+
+
+def test_queries_ignore_stubs_and_other_diseases_mechanisms():
+    _, paths = run_tool(handler.get_mechanism_paths, {"disease_id": JMML}, lambda *_: [])
+    assert "WHERE b.id IS NOT NULL" in paths.queries[0]
+    _, treatment = run_tool(handler.get_treatment_evidence, {"disease_id": JMML}, lambda *_: [])
+    assert "WHERE m.disease_id = $disease_id" in treatment.queries[0]
+    _, evidence = run_tool(handler.get_evidence, {"reference": "PMID:1"}, lambda *_: [])
+    assert "a.id IS NOT NULL AND b.id IS NOT NULL" in evidence.queries[0]
+
+
+def test_evidence_lookup_resolves_mechanism_edges_by_id():
+    for edge, expect in (
+        (f"dismech:{STEP}|leads_to|dismech:mechanism:MONDO:0011908:Other", "Mechanism {id: $subject}"),
+        (f"dismech:{STEP}|leads_to_phenotype|HP:0001903", "LEADS_TO_PHENOTYPE"),
+        (f"dismech:{JMML}|has_mechanism|{STEP}", "Mechanism {id: $object}"),
+    ):
+        _, session = run_tool(handler.get_evidence, {"edge_id": edge}, lambda *_: [])
+        assert expect in session.queries[0], edge
+        assert "{name:" not in session.queries[0]

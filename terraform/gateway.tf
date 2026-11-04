@@ -509,7 +509,7 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
               property {
                 name        = "edge_id"
                 type        = "string"
-                description = "Edge id from a previous result, e.g. dismech:Clonal Plasma Cell Proliferation|leads_to|Bone Marrow Failure"
+                description = "Edge id copied from graph.edges[].id of a previous result, e.g. monarch:HGNC:6407|biolink:gene_associated_with_condition|MONDO:0011908"
               }
 
               property {
@@ -651,7 +651,7 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
 
           inline_payload {
             name        = "kg_get_gene_context"
-            description = "Everything the graph records about one human gene, per source: Monarch gene-disease associations, DisMech genetic factors and the disease subtypes the gene defines. States none recorded for each loaded source with no record, and that Open Targets and CIViC are not loaded."
+            description = "Everything the graph records about one human gene, per source: Monarch gene-disease associations, DisMech genetic factors, the disease subtypes the gene defines, and the drugs that act on it (Open Targets mechanism of action). States none recorded for Monarch and DisMech when a source has nothing, and that CIViC is not loaded."
 
             input_schema {
               type = "object"
@@ -960,7 +960,7 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
 
           inline_payload {
             name        = "kg_get_treatment_evidence"
-            description = "DisMech recorded treatments for a disease with their agents, the mechanism each treatment acts on (with that edge's own evidence, and the mechanism's place in the disease record) and the cited evidence text. Reports treatments with no mechanism link and agents with no recorded molecular target. Recorded knowledge, not a recommendation."
+            description = "DisMech recorded treatments for a disease with their agents, the mechanism each treatment acts on (with that edge's own evidence, and the mechanism's place in the disease record) and the cited evidence text. Also returns each agent's molecular targets from Open Targets (a separate source from DisMech, capped at 10 per agent), and reports treatments with no mechanism link and agents with no recorded target. Recorded knowledge, not a recommendation."
 
             input_schema {
               type = "object"
@@ -1117,7 +1117,7 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
 
           inline_payload {
             name        = "kg_run_readonly_query"
-            description = "Run a single read-only openCypher query when no named tool fits. Writes, CALL and unbounded variable-length paths are rejected; results are capped at 100 rows. Graph: (:Disease {id,name})-[:ASSOCIATION {predicate,source,source_version,edge_origin,primary_knowledge_source,publications}]->(:Entity or :Disease {id,label,category}); (:Disease)-[:HAS_MECHANISM]->(:Mechanism {name,description}); (:Mechanism)-[:LEADS_TO {evidence_pmid,evidence_snippet,dismech_explanation}]->(:Mechanism); a Monarch gene-disease association has the gene as subject: (:Entity {category:'biolink:Gene'})-[:ASSOCIATION]->(:Disease); (:Entity)-[:HAS_AGENT]->(:Entity); (:Entity {subtype})-[:HAS_DRIVER_GENE]->(:Entity {gene}); (:Entity {treatment})-[:TARGETS_MECHANISM {treatment_effect,evidence_pmid,evidence_snippet}]->(:Mechanism)."
+            description = "Run a single read-only openCypher query when no named tool fits. Writes, CALL and unbounded variable-length paths are rejected; results are capped at 100 rows. Graph: (:Disease {id,name})-[:ASSOCIATION {predicate,source,source_version,edge_origin,primary_knowledge_source,publications}]->(:Entity or :Disease {id,label,category}); (:Disease)-[:HAS_MECHANISM]->(:Mechanism {id,name,disease_id,description}); (:Mechanism)-[:LEADS_TO {evidence_pmid,evidence_snippet,dismech_explanation}]->(:Mechanism); (:Mechanism)-[:LEADS_TO_PHENOTYPE]->(:Entity) for a downstream phenotype; a Monarch gene-disease association has the gene as subject: (:Entity {category:'biolink:Gene'})-[:ASSOCIATION]->(:Disease); (:Entity)-[:HAS_AGENT]->(:Entity); (:Entity {drug})-[:TARGETS_GENE {source:'opentargets',action_type,mechanism_of_action,references}]->(:Entity {gene}); (:Entity {subtype})-[:HAS_DRIVER_GENE]->(:Entity {gene}); (:Entity {treatment})-[:TARGETS_MECHANISM {treatment_effect,evidence_pmid,evidence_snippet}]->(:Mechanism)."
 
             input_schema {
               type = "object"

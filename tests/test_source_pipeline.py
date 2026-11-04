@@ -393,10 +393,11 @@ def test_new_upstream_relationship_shapes_keep_loader_identities(snapshot):
             "monarch") in records
     assert ("association", common.DISEASE, "dismech:has_subtype", subtype, "dismech") in records
     assert ("driver", subtype, "HAS_DRIVER_GENE", "HGNC:11998", "dismech") in records
-    assert ("target", "dismech:treatment:Recorded therapy", "TARGETS_MECHANISM", "A", "dismech") in records
+    mechanism_a = loader.mechanism_id(common.DISEASE, "A")
+    assert ("target", "dismech:treatment:Recorded therapy", "TARGETS_MECHANISM", mechanism_a, "dismech") in records
     driver = FakeDriver()
     loader.load_monarch(driver, monarch, "test")
     loader.load_dismech(driver, dismech, "test")
     assert any(params.get("subtype") == subtype for _, params in driver.calls)
-    assert any(params.get("mechanism") == "A" and "TARGETS_MECHANISM" in query
+    assert any(params.get("mechanism") == mechanism_a and "TARGETS_MECHANISM" in query
                for query, params in driver.calls)

@@ -12,6 +12,7 @@ Citations are stored as plain properties on the relationship they support, not a
 | `(:Disease)-[:ASSOCIATION {source: 'dismech'}]->(:Entity)` | `evidence_pmid`, `evidence_snippet`, `dismech_explanation` | `write_association`, from the phenotype, genetic or treatment record's own `evidence[0]` |
 | `(:Disease)-[:HAS_MECHANISM]->(:Mechanism)` | `evidence_pmid`, `evidence_snippet`, `dismech_explanation` | `load_dismech`, from the step's own `evidence[0]` |
 | `(:Mechanism)-[:LEADS_TO]->(:Mechanism)` | `evidence_pmid`, `evidence_snippet`, `dismech_explanation` | `load_dismech`, from that `downstream[].evidence[0]` |
+| `(:Mechanism)-[:LEADS_TO_PHENOTYPE]->(:Entity)` | `evidence_pmid`, `evidence_snippet`, `dismech_explanation` | `load_dismech`, from that `downstream[].evidence[0]`, for a downstream target that is not a mechanism step |
 
 All DisMech relationships pull from the same shape in the raw YAML (`evidence: [{reference, snippet, explanation}]`) — a phenotype, genetic or treatment record's own evidence for `ASSOCIATION`, a mechanism's own evidence for `HAS_MECHANISM`, a causal edge's evidence for `LEADS_TO`. Only the first evidence item is loaded for any of them. `kg_get_mechanism_paths` reports this as a limitation for causal edges; today only two second citations are left out, on Immune Dysregulation and Anti-CD38 Monoclonal Antibody Therapy. The TP53 and Hyperdiploidy records have no evidence in DisMech, so they get the limitation in section 4.
 

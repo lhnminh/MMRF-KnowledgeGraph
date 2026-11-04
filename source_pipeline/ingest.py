@@ -20,11 +20,11 @@ from source_pipeline.common import (
 MATCHES = {
     "association": """MATCH (a {id: $start})-[r:ASSOCIATION {source: $source, predicate: $predicate}]->(b)
                       WHERE b.id = $end""",
-    "mechanism": """MATCH (a:Disease {id: $start})-[r:HAS_MECHANISM {source: $source}]->(b:Mechanism {name: $end})""",
-    "leads_to": """MATCH (a:Mechanism {name: $start})-[r:LEADS_TO {source: $source}]->(b:Mechanism {name: $end})""",
+    "mechanism": """MATCH (a:Disease {id: $start})-[r:HAS_MECHANISM {source: $source}]->(b:Mechanism {id: $end})""",
+    "leads_to": """MATCH (a:Mechanism {id: $start})-[r:LEADS_TO {source: $source}]->(b:Mechanism {id: $end})""",
     "agent": """MATCH (a:Entity {id: $start})-[r:HAS_AGENT {source: $source}]->(b:Entity {id: $end})""",
     "driver": """MATCH (a:Entity {id: $start})-[r:HAS_DRIVER_GENE {source: $source}]->(b:Entity {id: $end})""",
-    "target": """MATCH (a:Entity {id: $start})-[r:TARGETS_MECHANISM {source: $source}]->(b:Mechanism {name: $end})""",
+    "target": """MATCH (a:Entity {id: $start})-[r:TARGETS_MECHANISM {source: $source}]->(b:Mechanism {id: $end})""",
 }
 STAMP = """
 SET r.ingestion_run_id = $run_id, r.retrieved_at = $retrieved_at, r.source_url = $source_url,
@@ -88,14 +88,19 @@ def expected_records(monarch, dismech):
     if not isinstance(steps, list) or not steps or len(steps) > 30:
         raise ValueError("DisMech mechanism list is empty or exceeds the small-refresh limit")
     names = {step["name"] for step in steps}
+
+    def mechanism(name):
+        # The id the loader gives a mechanism: names repeat across diseases, so it includes the disease.
+        return f"dismech:mechanism:{DISEASE}:{name}"
+
     if len(names) != len(steps):
         raise ValueError("DisMech mechanism names must be unique")
     for index, step in enumerate(steps):
-        add("mechanism", DISEASE, "has_mechanism", step["name"], "dismech", step, f"/pathophysiology/{index}")
+        add("mechanism", DISEASE, "has_mechanism", mechanism(step["name"]), "dismech", step, f"/pathophysiology/{index}")
         for downstream_index, downstream in enumerate(step.get("downstream", [])):
             if downstream["target"] not in names:
                 raise ValueError("DisMech downstream target has no mechanism definition")
-            add("leads_to", step["name"], "leads_to", downstream["target"], "dismech", downstream,
+            add("leads_to", mechanism(step["name"]), "leads_to", mechanism(downstream["target"]), "dismech", downstream,
                 f"/pathophysiology/{index}/downstream/{downstream_index}")
     for index, record in enumerate(dismech.get("phenotypes", [])):
         term = record["phenotype_term"]["term"]
@@ -119,7 +124,7 @@ def expected_records(monarch, dismech):
         for target_index, target in enumerate(record.get("target_mechanisms", [])):
             if target["target"] not in names:
                 raise ValueError("Recorded treatment references an undefined mechanism")
-            add("target", identifier, "TARGETS_MECHANISM", target["target"], "dismech", target,
+            add("target", identifier, "TARGETS_MECHANISM", mechanism(target["target"]), "dismech", target,
                 f"/treatments/{index}/target_mechanisms/{target_index}")
         for agent_index, agent in enumerate(record["treatment_term"].get("therapeutic_agent", [])):
             add("agent", identifier, "HAS_AGENT", agent["term"]["id"], "dismech", agent,
