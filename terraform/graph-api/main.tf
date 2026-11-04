@@ -3,7 +3,6 @@ terraform {
   required_providers {
     aws     = { source = "hashicorp/aws", version = "~> 6.0" }
     archive = { source = "hashicorp/archive", version = "~> 2.0" }
-    random  = { source = "hashicorp/random", version = "~> 3.0" }
   }
 }
 
@@ -47,7 +46,7 @@ data "aws_lambda_function" "graph" {
 }
 
 resource "aws_kms_key" "graph_api" {
-  description         = "${var.name} key for Lambda env vars, log groups, and SSM parameter encryption"
+  description         = "${var.name} key for Lambda env vars and log groups"
   enable_key_rotation = true
   policy = jsonencode({
     Version = "2012-10-17"
@@ -78,19 +77,6 @@ resource "aws_kms_key" "graph_api" {
 resource "aws_kms_alias" "graph_api" {
   name          = "alias/${var.name}"
   target_key_id = aws_kms_key.graph_api.key_id
-}
-
-resource "random_password" "access_token" {
-  length  = 48
-  special = false
-}
-
-resource "aws_ssm_parameter" "access_token" {
-  name        = "/${var.name}/access-token"
-  description = "Sandbox graph viewer bearer token; never embed in frontend assets or URLs"
-  type        = "SecureString"
-  value       = random_password.access_token.result
-  key_id      = aws_kms_key.graph_api.arn
 }
 
 resource "aws_iam_role" "api" {
@@ -131,7 +117,7 @@ data "archive_file" "api" {
 }
 
 resource "aws_lambda_function" "api" {
-  #checkov:skip=CKV_AWS_117:Sandbox viewer Lambda only calls other Lambdas and SSM via AWS APIs; VPC placement would need NAT setup with no security benefit here
+  #checkov:skip=CKV_AWS_117:Sandbox viewer Lambda only calls the read-only graph Lambda via AWS APIs; VPC placement would need NAT setup with no security benefit here
   #checkov:skip=CKV_AWS_116:No DLQ; synchronous API Gateway invocation has no retry/async failure path for a DLQ to catch
   #checkov:skip=CKV_AWS_272:Code-signing not configured; sandbox deployment, no code-signing pipeline exists yet
   function_name                  = var.name
@@ -152,7 +138,6 @@ resource "aws_lambda_function" "api" {
   environment {
     variables = {
       GRAPH_FUNCTION_NAME = data.aws_lambda_function.graph.function_name
-      ACCESS_TOKEN_SHA256 = sha256(random_password.access_token.result)
     }
   }
   depends_on = [aws_iam_role_policy.api]
@@ -215,8 +200,4 @@ output "graph_url" {
 
 output "graph_api_url" {
   value = "${aws_apigatewayv2_api.graph.api_endpoint}/api/graph"
-}
-
-output "access_token_parameter" {
-  value = aws_ssm_parameter.access_token.name
 }

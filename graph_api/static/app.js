@@ -1,9 +1,9 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const filterIds = ['view', 'source', 'entity_type', 'predicate', 'q'];
-let token = '', data = null, cy = null, controller = null, sequence = 0, timer;
+let data = null, cy = null, controller = null, sequence = 0, timer;
 const element = (tag, text) => { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; return node; };
-const prettify = value => value.replace(/^biolink:|^dismech:/, '').replaceAll('_', ' ');
+const prettify = value => value === 'opentargets' ? 'Open Targets' : value.replace(/^biolink:|^dismech:/, '').replaceAll('_', ' ');
 const overlay = (text, error = false) => { $('overlay').textContent = text; $('overlay').hidden = !text; $('overlay').classList.toggle('error', error); };
 function note(text) { $('details').append(element('p', text)); }
 function heading(text) { $('details').append(element('h3', text)); }
@@ -21,7 +21,7 @@ function showSource(source) {
 function home() {
   $('details').replaceChildren(element('h2', 'Explore the recorded evidence'));
   note('Select a node or arrow to inspect its identifiers, source version, and available references.');
-  note('Blue arrows show Monarch records; amber arrows show DisMech records. An association alone does not establish a causal mechanism.');
+  note('Blue arrows show Monarch records; amber arrows show DisMech records; teal arrows show Open Targets drug targets. An association alone does not establish a causal mechanism.');
   if (data) note(`Queried from AWS Neptune at ${new Date(data.meta.fetched_at).toLocaleString()}.`);
 }
 function highlight(nodeIds, edgeIds) {
@@ -55,7 +55,7 @@ function selectEdge(id) {
   $('details').append(element('code', edge.original_id || edge.tool_edge_id));
   showSource({source_dataset: edge.source_dataset, source_version: edge.source_version, url: edge.source_url});
   heading('Relationship metadata');
-  for (const key of ['relationship_type', 'identifier_origin', 'edge_origin', 'confidence', 'review_status', 'retrieved_at', 'synthetic', 'frequency']) {
+  for (const key of ['relationship_type', 'identifier_origin', 'edge_origin', 'confidence', 'review_status', 'retrieved_at', 'synthetic', 'frequency', 'chembl_id', 'action_type', 'mechanism_of_action']) {
     if (edge[key] !== undefined && edge[key] !== null) note(`${prettify(key)}: ${edge[key]}`);
   }
   heading('Recorded references');
@@ -82,6 +82,7 @@ function renderGraph() {
       {selector: 'node[type="Mechanism"]', style: {shape: 'round-rectangle', width: 100, height: 34, 'text-valign': 'center', 'text-margin-y': 0, color: '#261e12', 'text-max-width': 93, 'font-size': 9}},
       {selector: 'edge', style: {width: 1.5, 'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'arrow-scale': 0.8, 'line-color': '#689ed1', 'target-arrow-color': '#689ed1', opacity: 0.7, 'font-size': 8, color: '#b3c3d8', 'text-background-color': '#101b2d', 'text-background-opacity': 0.85, 'text-background-padding': '3px', 'text-rotation': 'autorotate'}},
       {selector: 'edge[source_dataset="dismech"]', style: {'line-color': '#bd9452', 'target-arrow-color': '#bd9452'}},
+      {selector: 'edge[source_dataset="opentargets"]', style: {'line-color': '#4bc5b8', 'target-arrow-color': '#4bc5b8'}},
       {selector: 'edge[relationship_type="HAS_MECHANISM"]', style: {'line-style': 'dashed'}},
       {selector: '.dim', style: {opacity: 0.14, 'text-opacity': 0.14}},
       {selector: ':selected', style: {'border-width': 3, 'border-color': '#ffffff', 'line-color': '#ffffff', 'target-arrow-color': '#ffffff'}}
@@ -100,7 +101,6 @@ function renderGraph() {
 }
 function setLabels() { cy?.edges().style('label', $('labels').getAttribute('aria-pressed') === 'true' ? 'data(shortLabel)' : ''); }
 async function loadGraph() {
-  if (!token) return;
   controller?.abort(); controller = new AbortController();
   const current = ++sequence, activeController = controller;
   const timeout = setTimeout(() => activeController.abort('timeout'), 27000);
@@ -108,25 +108,25 @@ async function loadGraph() {
   // Remove stale data immediately so failures never leave an old graph labelled as current.
   data = null; cy?.destroy(); cy = null; $('node-list').replaceChildren(); $('limitations').replaceChildren(); home();
   $('download').disabled = true; $('counts').textContent = 'Loading from Neptune…'; overlay('Loading recorded relationships from Neptune…');
-  $('connect').disabled = true;
   try {
-    const result = await fetch(`/api/graph?${params}`, {headers: {Authorization: `Bearer ${token}`}, signal: activeController.signal, cache: 'no-store'});
+    const result = await fetch(`/api/graph?${params}`, {signal: activeController.signal, cache: 'no-store'});
     const value = await result.json();
     if (current !== sequence) return;
     if (!result.ok) throw new Error(value.error || `Request failed (${result.status}).`);
     data = value; updateFacets(data.facets); renderGraph(); $('download').disabled = false;
     $('connection-status').textContent = `Connected · refreshed ${new Date(data.meta.fetched_at).toLocaleTimeString()}`;
-    $('connect').textContent = 'Reconnect'; $('disconnect').hidden = false;
   } catch (error) {
     if (current !== sequence) return;
     const message = error.name === 'AbortError' || activeController.signal.reason === 'timeout' ? 'The request timed out. Select Refresh to try again.' : error.message;
     overlay(message, true); $('counts').textContent = 'Graph unavailable'; $('connection-status').textContent = message;
-  } finally { clearTimeout(timeout); if (current === sequence) $('connect').disabled = false; }
+  } finally { clearTimeout(timeout); }
 }
-$('connect-form').onsubmit = event => {event.preventDefault(); token = $('token').value.trim(); $('token').value = ''; loadGraph();};
-$('disconnect').onclick = () => {++sequence; controller?.abort(); token = ''; data = null; cy?.destroy(); cy = null; $('token').value = ''; $('node-list').replaceChildren(); $('limitations').replaceChildren(); $('disconnect').hidden = true; $('connect').textContent = 'Connect'; $('connect').disabled = false; $('download').disabled = true; $('connection-status').textContent = 'Disconnected. The token has been cleared.'; $('counts').textContent = 'Connect to explore the graph'; overlay('Connect with your sandbox token to load live Neptune data.'); home();};
 $('filters').onsubmit = event => event.preventDefault();
-filterIds.filter(id => id !== 'q').forEach(id => $(id).onchange = () => { clearTimeout(timer); loadGraph(); });
+filterIds.filter(id => id !== 'q').forEach(id => $(id).onchange = () => {
+  clearTimeout(timer);
+  if (id === 'source' && $('source').value === 'opentargets' && !['all', 'treatments'].includes($('view').value)) $('view').value = 'treatments';
+  loadGraph();
+});
 $('q').oninput = () => {clearTimeout(timer); timer = setTimeout(loadGraph, 400);};
 $('reset').onclick = () => {clearTimeout(timer); filterIds.forEach(id => $(id).value = id === 'view' ? 'all' : ''); loadGraph();};
 $('refresh').onclick = loadGraph;
@@ -134,3 +134,4 @@ $('fit').onclick = () => cy?.fit(undefined, 40);
 $('labels').onclick = () => {$('labels').setAttribute('aria-pressed', $('labels').getAttribute('aria-pressed') !== 'true' ? 'true' : 'false'); setLabels();};
 $('download').disabled = true;
 $('download').onclick = () => {if (!data) return; const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'})); const a = element('a'); a.href = url; a.download = 'orion-neptune-filtered-graph.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);};
+loadGraph();

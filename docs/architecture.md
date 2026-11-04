@@ -30,7 +30,7 @@ flowchart TB
 
     subgraph graphapi["Independent stack: terraform/graph-api"]
         apigw["API Gateway HTTP API<br/>5 rps / burst 20"]
-        apilambda["Lambda: mmrf-kg-graph-api<br/>bearer-token check"]
+        apilambda["Lambda: mmrf-kg-graph-api<br/>public read-only graph adapter"]
     end
 
     cw["CloudWatch<br/>log groups (14d) for both Lambdas, Gateway, Neptune audit<br/>metric filter -> alarm -> SNS -> email"]
@@ -44,7 +44,7 @@ flowchart TB
     kgingest -->|"GetObject via endpoint"| s3endpoint
     s3endpoint --- s3
 
-    browser -->|"HTTPS + bearer token"| apigw
+    browser -->|"HTTPS, no bearer token"| apigw
     apigw --> apilambda
     apilambda -->|"InvokeFunction (read-only tool only)"| kggraph
 

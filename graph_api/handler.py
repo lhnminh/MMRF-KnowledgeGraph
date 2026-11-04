@@ -1,7 +1,6 @@
 """API Gateway HTTP API v2 adapter. Never accepts caller-supplied queries or tool names."""
 
 import hashlib
-import hmac
 import json
 import logging
 import os
@@ -12,11 +11,20 @@ from urllib.parse import urlsplit
 
 DISEASE = "MONDO:0009693"
 MAX_EDGES = 100  # Existing kg_run_readonly_query returns at most 100 rows.
+MAX_TARGET_PAGES = 2
+MAX_FETCH_EDGES = MAX_EDGES * (1 + MAX_TARGET_PAGES)
 QUERY = """MATCH (d:Disease {id: $disease_id})-[r]->(b)
 RETURN d AS a, r, b
 UNION
 MATCH (:Disease {id: $disease_id})-[:HAS_MECHANISM|ASSOCIATION]->(a)-[r:LEADS_TO|HAS_AGENT]->(b)
 RETURN a, r, b"""
+TARGET_QUERY = """MATCH (:Disease {id: $disease_id})
+-[:ASSOCIATION {source: 'dismech', predicate: 'dismech:has_recorded_treatment'}]->(:Entity)
+-[:HAS_AGENT]->(a:Entity)-[r:TARGETS_GENE {source: 'opentargets'}]->(b:Entity)
+RETURN DISTINCT a, r, b
+ORDER BY a.id, b.id
+SKIP {offset}
+LIMIT 101"""
 CLINICAL_IDS = {
     "HP:0002653", "HP:0002797", "HP:0000938", "HP:0002756", "HP:0002953",
     "HP:0000112", "HP:0001919", "HP:0000100", "HP:0003259", "HP:0003072", "HP:0001903",
@@ -26,6 +34,7 @@ PARAMETERS = {"disease_id", "view", "source", "entity_type", "predicate", "q", "
 METADATA = (
     "confidence", "review_status", "retrieved_at", "synthetic", "source_url", "frequency",
     "association_type", "ontology_term", "therapeutic_modality", "record_name",
+    "chembl_id", "action_type", "mechanism_of_action",
 )
 ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -63,17 +72,6 @@ def response(status, body, content_type="application/json; charset=utf-8"):
     }
 
 
-def authorized(headers):
-    expected = os.environ.get("ACCESS_TOKEN_SHA256", "")
-    value = {k.lower(): v for k, v in headers.items()}.get("authorization", "")
-    if not re.fullmatch(r"[0-9a-f]{64}", expected) or not isinstance(value, str):
-        return False
-    scheme, _, token = value.partition(" ")
-    if scheme.lower() != "bearer" or not 16 <= len(token) <= 256:
-        return False
-    return hmac.compare_digest(hashlib.sha256(token.encode()).hexdigest(), expected)
-
-
 def invoke_tool(tool, **arguments):
     global _client
     if _client is None:
@@ -101,14 +99,22 @@ def reference_url(reference):
         return "https://pubmed.ncbi.nlm.nih.gov/" + value.split(":")[1] + "/"
     if value.startswith("https://") and urlsplit(value).hostname:
         return value
+    # Open Targets keeps the source prefix, for example FDA:https://... .
+    candidate = value.partition(":")[2]
+    if candidate.startswith("https://") and urlsplit(candidate).hostname:
+        return candidate
     return None
 
 
-def source_url(dataset, version):
+def source_url(dataset, version, record_id=None):
     if dataset == "monarch":
         return "https://monarchinitiative.org/"
     if dataset == "dismech" and re.fullmatch(r"[0-9a-f]{40}", str(version)):
         return f"https://github.com/monarch-initiative/dismech/blob/{version}/kb/disorders/Multiple_Myeloma.yaml"
+    if dataset == "opentargets":
+        if re.fullmatch(r"CHEMBL\d+", str(record_id)):
+            return f"https://platform.opentargets.org/drug/{record_id}"
+        return "https://platform.opentargets.org/"
     return None
 
 
@@ -165,7 +171,7 @@ def graph_from_table(result):
         return identifier
 
     rows = table.get("rows", [])
-    if len(rows) > MAX_EDGES:
+    if len(rows) > MAX_FETCH_EDGES:
         raise UpstreamError("Graph tool exceeded the response bound.")
     for raw_a, raw_r, raw_b in rows:
         props = raw_r["properties"]
@@ -182,7 +188,8 @@ def graph_from_table(result):
         # Dataset/version/type are part of the identity; keep independently recorded edges separate.
         key = json.dumps([identifier, version, kind], ensure_ascii=False)
         eid = "edge:" + hashlib.sha256(key.encode()).hexdigest()[:24]
-        refs = references(props.get("evidence_pmid")) + references(props.get("publications"))
+        refs = (references(props.get("evidence_pmid")) + references(props.get("publications"))
+                + references(props.get("references")))
         if not refs:
             refs = references(props.get("primary_knowledge_source"))
         evidence_ids = []
@@ -199,7 +206,8 @@ def graph_from_table(result):
             "source": a, "target": b,
             "predicate": predicate, "relationship_type": kind,
             "source_dataset": dataset, "source_version": version,
-            "source_url": source_url(dataset, version), "edge_origin": props.get("edge_origin", "unrecorded"),
+            "source_url": source_url(dataset, version, props.get("chembl_id")),
+            "edge_origin": props.get("edge_origin", "unrecorded"),
             "evidence_ids": evidence_ids, **{key: props[key] for key in METADATA if key in props},
         }
     return {"nodes": list(nodes.values()), "edges": sorted(edges.values(), key=lambda edge: edge["id"])}, evidence
@@ -237,7 +245,7 @@ def filter_graph(graph, filters):
             continue
         if view == "treatments" and edge["predicate"] != "dismech:has_recorded_treatment" and edge[
             "relationship_type"
-        ] != "HAS_AGENT":
+        ] not in {"HAS_AGENT", "TARGETS_GENE"}:
             continue
         if view == "clinical" and not all(
             node["id"] in CLINICAL_IDS or node["id"] == DISEASE or node["type"] == "Mechanism"
@@ -262,15 +270,59 @@ def filter_graph(graph, filters):
     return {"nodes": [node for node in graph["nodes"] if node["id"] in connected], "edges": selected}, truncated
 
 
+def fetch_graph():
+    """Fetch only the fixed disease slice and its recorded drug targets, with bounded pagination."""
+    result = invoke_tool("kg_run_readonly_query", query=QUERY, parameters={"disease_id": DISEASE})
+    if result.get("table", {}).get("columns") != ["a", "r", "b"]:
+        raise UpstreamError("Unexpected graph tool response schema.")
+    rows = list(result["table"]["rows"])
+    if len(rows) > MAX_EDGES:
+        raise UpstreamError("Graph tool exceeded the response bound.")
+    limitations = list(result.get("limitations", []))
+    trace = dict(result.get("trace", {}))
+    calls = list(trace.get("tool_calls", []))
+    request_ids = [trace["request_id"]] if trace.get("request_id") else []
+    for page in range(MAX_TARGET_PAGES):
+        target = invoke_tool("kg_run_readonly_query", query=TARGET_QUERY.replace("{offset}", str(page * MAX_EDGES)),
+                             parameters={"disease_id": DISEASE})
+        if target.get("table", {}).get("columns") != ["a", "r", "b"]:
+            raise UpstreamError("Unexpected drug-target response schema.")
+        target_rows = target["table"]["rows"]
+        if len(target_rows) > MAX_EDGES:
+            raise UpstreamError("Graph tool exceeded the response bound.")
+        if any(row[1].get("type") != "TARGETS_GENE" or row[1].get("properties", {}).get("source") != "opentargets"
+               for row in target_rows):
+            raise UpstreamError("Unexpected drug-target relationship.")
+        rows.extend(target_rows)
+        target_limits = target.get("limitations", [])
+        truncated = any("cut off" in text.lower() for text in target_limits)
+        limitations.extend(text for text in target_limits if "cut off" not in text.lower())
+        calls.extend(target.get("trace", {}).get("tool_calls", []))
+        if target.get("trace", {}).get("request_id"):
+            request_ids.append(target["trace"]["request_id"])
+        if not truncated:
+            break
+        if len(target_rows) != MAX_EDGES:
+            raise UpstreamError("Incomplete drug-target page.")
+        if page == MAX_TARGET_PAGES - 1:
+            limitations.append("Drug-target results are cut off at 200 relationships for this disease.")
+    if calls:
+        trace["tool_calls"] = calls
+    trace["upstream_request_ids"] = list(dict.fromkeys(request_ids))
+    return {"table": {"columns": ["a", "r", "b"], "rows": rows},
+            "limitations": list(dict.fromkeys(limitations)), "trace": trace}
+
+
 def get_graph(params):
     filters = validate_filters(params)
-    result = invoke_tool("kg_run_readonly_query", query=QUERY, parameters={"disease_id": DISEASE})
+    result = fetch_graph()
     graph, evidence = graph_from_table(result)
     selected, clipped = filter_graph(graph, filters)
     used_evidence = {rid for edge in selected["edges"] for rid in edge["evidence_ids"]}
     limitations = list(result.get("limitations", []))
     limitations.extend([
-        "This is a disease-centred graph within two outgoing hops, capped at 100 relationships; it is not a full database export.",
+        "This is a disease-centred graph with a third hop limited to recorded drug targets, capped at 100 displayed relationships; it is not a full database export.",
+        "Open Targets drug-to-gene mechanisms are a separate source from DisMech treatment and trial evidence.",
         "Phenotype associations and source-reported mechanisms do not establish links between mechanisms and phenotypes.",
         "Article snippets and curator descriptions are omitted; citation identifiers and source versions are retained.",
         "Recorded treatments are published knowledge, not treatment recommendations. No patient or cohort data is returned.",
@@ -290,7 +342,7 @@ def get_graph(params):
             "predicates": sorted({edge["predicate"] for edge in graph["edges"]}),
         },
         "meta": {
-            "disease_id": DISEASE, "filters": filters, "maximum_depth": 2,
+            "disease_id": DISEASE, "filters": filters, "maximum_depth": 3,
             "total_nodes": len(graph["nodes"]), "total_edges": len(graph["edges"]),
             "truncated": clipped or any("cut off" in text.lower() for text in result.get("limitations", [])),
             "fetched_at": datetime.now(timezone.utc).isoformat(), "backend": "AWS Neptune",
@@ -310,14 +362,12 @@ def handler(event, context):
         return response(200, (Path(__file__).parent / "static" / name).read_text(), content_type)
     if path != "/api/graph":
         return response(404, {"error": "Endpoint not found.", "request_id": request_id})
-    if not authorized(event.get("headers") or {}):
-        return response(401, {"error": "Enter a valid graph access token.", "request_id": request_id})
     try:
         return response(200, get_graph(event.get("queryStringParameters") or {}))
     except InputError as error:
         return response(400, {"error": str(error), "request_id": request_id})
     except Exception as error:
-        # Never log the request event, bearer token, source text, or upstream response.
+        # Never log the request event, source text, or upstream response.
         LOGGER.error("Graph API failure request_id=%s kind=%s", request_id, type(error).__name__)
         return response(502, {
             "error": "The graph service could not complete the request. Try again shortly.",

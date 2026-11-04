@@ -14,13 +14,7 @@
     <p>Follow the recorded relationships. Inspect the evidence behind each connection.</p></div>
     <span class="badge">AWS Neptune · sandbox</span>
   </header>
-  <form id="connect-form" class="connection">
-    <label for="token">Graph access token</label>
-    <input id="token" type="password" autocomplete="off" placeholder="Paste your sandbox access token" required>
-    <button id="connect" type="submit">Connect</button>
-    <button id="disconnect" type="button" hidden>Disconnect</button>
-    <span id="connection-status">The token stays in this page’s memory.</span>
-  </form>
+  <div class="connection"><span id="connection-status" role="status">Loading live graph data…</span></div>
   <main>
     <section class="workspace">
       <form id="filters" class="filters">
@@ -31,8 +25,8 @@
         <label class="search-label">Find a node<input id="q" type="search" placeholder="e.g. TP53, anemia, bone"></label>
         <button id="reset" type="button">Reset filters</button>
       </form>
-      <div class="graph-toolbar"><span id="counts">Connect to explore the graph</span><div><button id="refresh" type="button">Refresh</button><button id="fit" type="button">Fit</button><button id="labels" type="button" aria-pressed="false">Edge labels</button><button id="download" type="button">Download JSON</button></div></div>
-      <div class="graph-wrap"><div id="graph" aria-label="Interactive graph. Use the node list below to inspect records with a keyboard."></div><div id="overlay" class="overlay" role="status" aria-live="polite">Connect with your sandbox token to load live Neptune data.</div><div class="hint">Scroll to zoom · Drag to pan · Select a node or arrow for evidence</div></div>
+      <div class="graph-toolbar"><span id="counts">Loading graph…</span><div><button id="refresh" type="button">Refresh</button><button id="fit" type="button">Fit</button><button id="labels" type="button" aria-pressed="false">Edge labels</button><button id="download" type="button">Download JSON</button></div></div>
+      <div class="graph-wrap"><div id="graph" aria-label="Interactive graph. Use the node list below to inspect records with a keyboard."></div><div id="overlay" class="overlay" role="status" aria-live="polite">Loading recorded relationships from Neptune…</div><div class="hint">Scroll to zoom · Drag to pan · Select a node or arrow for evidence</div></div>
       <div class="legend"><span><i class="disease"></i>Disease</span><span><i class="phenotype"></i>Phenotype</span><span><i class="mechanism"></i>Mechanism</span><span><i class="gene"></i>Genetic factor</span><span><i class="drug"></i>Treatment / drug</span></div>
       <details class="node-list"><summary>Browse visible nodes with a keyboard</summary><div id="node-list"></div></details>
     </section>
