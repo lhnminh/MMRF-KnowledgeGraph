@@ -47,6 +47,10 @@ class HealthyGateway:
                             + [{"id": "c", "predicate": "leads_to"}] * smoke.CAUSAL_EDGES)
         if name == "kg_get_evidence":
             return envelope(evidence=[{"reference": "PMID:1"}])
+        if name == "kg_get_gene_disease_association":
+            return envelope(edges=[{"source": smoke.KRAS_ID, "target": smoke.JMML_ID, "source_dataset": "monarch"}])
+        if name == "kg_get_treatment_evidence":
+            return envelope(edges=[{"predicate": "targets_mechanism"}], evidence=[{"reference": smoke.TRAMETINIB_PMID}])
         raise AssertionError(name)
 
 
@@ -73,6 +77,16 @@ def test_a_missing_tool_fails():
     gateway = HealthyGateway()
     gateway.list_tools = lambda: smoke.TOOLS - {"kg_get_evidence"}
     assert smoke.run_checks(gateway) == ["tools are listed"]
+
+
+def test_a_graph_without_the_jmml_links_fails():
+    class NoJmml(HealthyGateway):
+        def call_tool(self, name, **arguments):
+            if name in {"kg_get_gene_disease_association", "kg_get_treatment_evidence"}:
+                return envelope()
+            return super().call_tool(name, **arguments)
+
+    assert smoke.run_checks(NoJmml()) == ["JMML gene, mechanism and treatment links are returned"]
 
 
 def test_an_accepted_write_query_fails():

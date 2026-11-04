@@ -173,6 +173,9 @@ Initial knowledge tools (names provisional):
 - `kg.get_mechanism_paths`
 - `kg.get_evidence`
 - `kg.run_readonly_query` (guarded)
+- Added after the first combined journey (proposed here, not in the original list):
+  `kg.get_gene_disease_association` and `kg.get_treatment_evidence`. `kg.get_gene_context`
+  (K-3.9, see Open Items) is implemented as well.
 - Later: `opentargets.get_associations`, `opentargets.get_top_targets`,
   `opentargets.get_drug_candidates`, `civic.get_evidence`
 
@@ -288,6 +291,8 @@ contained card leaves the surrounding page untouched.
   so this is due by the end of P1 (work breakdown I-2).
 - New tool required by the combined journeys: `kg.get_gene_context`, returning per-source
   coverage for a gene with an explicit "no record" result per source (work breakdown K-3.9).
+  Implemented as `kg_get_gene_context`; the per-source result is carried in `limitations`, not in a new
+  envelope field, so `contract_version` stays 0.2.
 - Response size limits and pagination.
 - Final tool names and parameter schemas.
 - Whether to upstream the wrapper changes or keep them in the fork.
