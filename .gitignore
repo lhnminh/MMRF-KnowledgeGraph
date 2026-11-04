@@ -11,6 +11,8 @@ data/transformed/
 !.env.example
 .terraform/
 *.tfstate*
+*.tfvars
+*.tfvars.json
 *.tfplan
 *.zip
 node_modules/

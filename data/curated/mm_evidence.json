@@ -1,0 +1,29 @@
+{
+  "description": "Small manually curated public biological assertions. Summaries are original paraphrases; no patient measurements or article text are included. These are research associations, not therapeutic recommendations.",
+  "nodes": [
+    {"id":"MONDO:0009693","name":"Multiple Myeloma","entity_type":"Disease","aliases":["plasma cell myeloma","myeloma"]},
+    {"id":"HGNC:11998","name":"TP53","entity_type":"Gene","aliases":["NCBIGene:7157","hgnc:11998"]},
+    {"id":"HGNC:6407","name":"KRAS","entity_type":"Gene","aliases":["NCBIGene:3845"]},
+    {"id":"HGNC:7989","name":"NRAS","entity_type":"Gene","aliases":["NCBIGene:4893"]},
+    {"id":"HGNC:1097","name":"BRAF","entity_type":"Gene","aliases":["NCBIGene:673"]},
+    {"id":"ORION:TP53_loss","name":"TP53 deletion or inactivation","entity_type":"Mechanism"},
+    {"id":"ORION:RAS_RAF","name":"RAS/RAF signaling alterations","entity_type":"Pathway"},
+    {"id":"UniProtKB:P04637","name":"Cellular tumor antigen p53","entity_type":"Protein","aliases":["p53","P53_HUMAN"]},
+    {"id":"HP:0001903","name":"Anemia","entity_type":"PhenotypicFeature"},
+    {"id":"HP:0003072","name":"Hypercalcemia","entity_type":"PhenotypicFeature"}
+  ],
+  "assertions": [
+    {"subject":"HGNC:11998","object":"MONDO:0009693","predicate":"biolink:associated_with","reference":"PMID:30373884","url":"https://pubmed.ncbi.nlm.nih.gov/30373884/","summary":"TP53 copy-number loss was associated with poorer outcomes in a myeloma study."},
+    {"subject":"HGNC:11998","object":"ORION:TP53_loss","predicate":"orion:has_alteration","reference":"PMID:30373884","url":"https://pubmed.ncbi.nlm.nih.gov/30373884/","summary":"The study measured TP53 deletions and distinguished clonal from subclonal loss."},
+    {"subject":"ORION:TP53_loss","object":"MONDO:0009693","predicate":"biolink:associated_with","reference":"PMID:30373884","url":"https://pubmed.ncbi.nlm.nih.gov/30373884/","summary":"TP53 deletion was examined in newly diagnosed myeloma."},
+    {"subject":"HGNC:6407","object":"MONDO:0009693","predicate":"biolink:associated_with","reference":"PMC:PMC4241387","url":"https://pmc.ncbi.nlm.nih.gov/articles/PMC4241387/","summary":"KRAS mutations were observed in sequenced myeloma tumors."},
+    {"subject":"HGNC:7989","object":"MONDO:0009693","predicate":"biolink:associated_with","reference":"PMC:PMC4241387","url":"https://pmc.ncbi.nlm.nih.gov/articles/PMC4241387/","summary":"NRAS mutations were observed in sequenced myeloma tumors."},
+    {"subject":"HGNC:1097","object":"MONDO:0009693","predicate":"biolink:associated_with","reference":"PMC:PMC4241387","url":"https://pmc.ncbi.nlm.nih.gov/articles/PMC4241387/","summary":"BRAF mutations were observed in sequenced myeloma tumors."},
+    {"subject":"HGNC:6407","object":"ORION:RAS_RAF","predicate":"biolink:participates_in","reference":"PMC:PMC11451330","url":"https://pmc.ncbi.nlm.nih.gov/articles/PMC11451330/","summary":"KRAS is included in the RAS/RAF mutational landscape studied in plasma-cell disorders."},
+    {"subject":"HGNC:7989","object":"ORION:RAS_RAF","predicate":"biolink:participates_in","reference":"PMC:PMC11451330","url":"https://pmc.ncbi.nlm.nih.gov/articles/PMC11451330/","summary":"NRAS is included in the RAS/RAF mutational landscape studied in plasma-cell disorders."},
+    {"subject":"HGNC:1097","object":"ORION:RAS_RAF","predicate":"biolink:participates_in","reference":"PMC:PMC11451330","url":"https://pmc.ncbi.nlm.nih.gov/articles/PMC11451330/","summary":"BRAF is included in the RAS/RAF mutational landscape studied in plasma-cell disorders."},
+    {"subject":"HGNC:11998","object":"UniProtKB:P04637","predicate":"orion:encodes","reference":"UniProtKB:P04637","url":"https://www.uniprot.org/uniprotkb/P04637/entry","summary":"UniProt identifies TP53 as the gene for the human p53 protein.","source_predicate_note":"ORION projection of the UniProt gene/product mapping; not a source Biolink assertion."},
+    {"subject":"MONDO:0009693","object":"HP:0001903","predicate":"biolink:has_phenotype","reference":"PMID:25439696","url":"https://pubmed.ncbi.nlm.nih.gov/25439696/","summary":"Anemia is among the disease-associated organ-damage features discussed in the IMWG publication."},
+    {"subject":"MONDO:0009693","object":"HP:0003072","predicate":"biolink:has_phenotype","reference":"PMID:25439696","url":"https://pubmed.ncbi.nlm.nih.gov/25439696/","summary":"The IMWG publication includes hypercalcemia among myeloma-associated organ-damage features."}
+  ]
+}

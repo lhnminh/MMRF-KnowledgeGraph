@@ -36,7 +36,8 @@ resource "aws_neptune_subnet_group" "this" {
   subnet_ids = aws_subnet.kg_private[*].id
 }
 
-# AD-005: Neptune port open only to named security groups, not to whole CIDRs.
+# Neptune access is scoped to security groups, including the Workbench notebook
+# that shares this group; no VPC-wide or public ingress is required.
 # The description is left as-is on purpose: changing it forces Terraform to replace the
 # security group, which fails while Neptune is attached to it.
 #
@@ -57,9 +58,26 @@ resource "aws_vpc_security_group_ingress_rule" "neptune_kg_graph" {
   to_port                      = 8182
 }
 
-# No egress rule on this group: security groups are stateful, so Neptune does not need one to
-# reply to the kg-graph/kg-ingest Bolt connections above. A rule allowing all protocols/ports to
-# the whole VPC CIDR was removed here on 2026-11-04 as unused attack surface.
+resource "aws_vpc_security_group_ingress_rule" "neptune_workbench" {
+  security_group_id            = aws_security_group.neptune.id
+  referenced_security_group_id = aws_security_group.neptune.id
+  description                  = "Neptune Workbench within this security group"
+  ip_protocol                  = "tcp"
+  from_port                    = 8182
+  to_port                      = 8182
+}
+
+# Workbench shares this group with Neptune and needs an outbound connection.
+# Keep that exception limited to the same group on 8182; preserve upstream's
+# removal of the former VPC-wide egress rule.
+resource "aws_vpc_security_group_egress_rule" "neptune_workbench" {
+  security_group_id            = aws_security_group.neptune.id
+  referenced_security_group_id = aws_security_group.neptune.id
+  description                  = "Neptune Workbench within this security group"
+  ip_protocol                  = "tcp"
+  from_port                    = 8182
+  to_port                      = 8182
+}
 
 # The default parameter group can't turn on audit logging (it's read-only); a custom group in
 # the same family can. neptune_enable_audit_log is a static parameter: it takes effect after the
