@@ -60,7 +60,8 @@ DATASET_NAMES = {"monarch": "Monarch", "dismech": "DisMech"}
 DESCRIBED_WITHOUT_EDGE = {
     "MONDO:0009693": [
         ("Clonal Plasma Cell Proliferation", "Genetic alterations", ["Clonal Plasma Cell Proliferation"],
-         "IGH translocations and hyperdiploidy drive the clonal expansion. DisMech's genetic records are not loaded."),
+         "IGH translocations and hyperdiploidy drive the clonal expansion. DisMech records them as genetic "
+         "factors of the disease, with no edge to any mechanism."),
         ("Monoclonal Immunoglobulin Production", "Monoclonal Immunoglobulin Production", ["Cast nephropathy"],
          "these proteins deposit in the kidneys and cause cast nephropathy. The graph has only the direct edge "
          "to Renal Impairment."),
@@ -267,7 +268,8 @@ ASSOCIATION_COLUMNS = """
     o.id AS object_id, o.label AS object_label, o.category AS object_type, r.description AS object_description,
     r.evidence_pmid AS pmid, r.evidence_snippet AS snippet, r.dismech_explanation AS explanation,
     r.publications AS publications, r.primary_knowledge_source AS primary_knowledge_source,
-    r.frequency AS frequency, r.source AS source, r.source_version AS source_version, r.edge_origin AS edge_origin
+    r.frequency AS frequency, r.record_name AS record_name, r.association_type AS association_type,
+    r.source AS source, r.source_version AS source_version, r.edge_origin AS edge_origin
 """
 
 LEADS_TO_COLUMNS = """
@@ -276,7 +278,8 @@ LEADS_TO_COLUMNS = """
     b.name AS object_id, b.name AS object_label, 'Mechanism' AS object_type, b.description AS object_description,
     r.evidence_pmid AS pmid, r.evidence_snippet AS snippet, r.dismech_explanation AS explanation,
     null AS publications, null AS primary_knowledge_source,
-    null AS frequency, r.source AS source, r.source_version AS source_version, r.edge_origin AS edge_origin
+    null AS frequency, null AS record_name, null AS association_type,
+    r.source AS source, r.source_version AS source_version, r.edge_origin AS edge_origin
 """
 
 HAS_MECHANISM_COLUMNS = """
@@ -285,7 +288,8 @@ HAS_MECHANISM_COLUMNS = """
     a.name AS object_id, a.name AS object_label, 'Mechanism' AS object_type, a.description AS object_description,
     h.evidence_pmid AS pmid, h.evidence_snippet AS snippet, h.dismech_explanation AS explanation,
     null AS publications, null AS primary_knowledge_source,
-    null AS frequency, h.source AS source, h.source_version AS source_version, h.edge_origin AS edge_origin
+    null AS frequency, null AS record_name, null AS association_type,
+    h.source AS source, h.source_version AS source_version, h.edge_origin AS edge_origin
 """
 
 
@@ -363,12 +367,20 @@ def add_edge_row(env, row):
             })
     else:
         source_name = DATASET_NAMES.get(dataset, dataset)
-        frequency = f" Frequency: {row['frequency'].replace('_', ' ').lower()}." if row["frequency"] else ""
+        details = ""
+        if row["record_name"] and row["record_name"] != row["object_label"]:
+            details += f" Record: {row['record_name']}."
+        if row["association_type"]:
+            details += f" Association: {row['association_type'].lower()}."
+        if row["frequency"]:
+            details += f" Frequency: {row['frequency'].replace('_', ' ').lower()}."
         env.observations.append({
             "text": f"{source_name} records: {row['subject_label']} {_humanize(predicate)} "
-                    f"{row['object_label']} ({row['object_id']}).{frequency}",
+                    f"{row['object_label']} ({row['object_id']}).{details}",
             "refs": evidence_ids,
         })
+        if predicate == "dismech:has_recorded_treatment":
+            env.limit("A recorded treatment is published knowledge in the source, not a treatment recommendation.")
         # A phenotype description often explains the cause ("anemia due to ..."), which is not
         # what the association edge records, so it stays out of observations.
         if row["object_description"]:

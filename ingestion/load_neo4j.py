@@ -125,35 +125,93 @@ def load_dismech(tx, dismech: dict, version: str) -> None:
 
     for phenotype in dismech.get("phenotypes", []):
         term = phenotype["phenotype_term"]["term"]
-        evidence = (phenotype.get("evidence") or [{}])[0]
         # The HP id joins this to any Monarch record of the same phenotype: one node, one edge per source.
-        tx.run(
-            """
-            MERGE (d:Disease {id: $disease_id})
-            MERGE (o:Entity {id: $object})
-            SET o.label = coalesce(o.label, $object_label),
-                o.category = coalesce(o.category, 'biolink:PhenotypicFeature'),
-                o.source = coalesce(o.source, 'dismech'),
-                o.source_version = coalesce(o.source_version, $version)
-            MERGE (d)-[r:ASSOCIATION {predicate: 'biolink:has_phenotype', source: 'dismech'}]->(o)
-            SET r.source_version = $version,
-                r.edge_origin = 'recorded',
-                r.frequency = $frequency,
-                r.description = $description,
-                r.evidence_pmid = $pmid,
-                r.evidence_snippet = $snippet,
-                r.dismech_explanation = $explanation
-            """,
-            disease_id=disease_id,
-            object=term["id"],
-            object_label=term["label"],
-            frequency=phenotype.get("frequency"),
-            description=phenotype.get("description"),
-            pmid=evidence.get("reference"),
-            snippet=evidence.get("snippet"),
-            explanation=evidence.get("explanation"),
-            version=version,
+        write_association(
+            tx, disease_id, term["id"], term["label"], "biolink:PhenotypicFeature", "biolink:has_phenotype",
+            phenotype, version, description=phenotype.get("description"), frequency=phenotype.get("frequency"),
         )
+
+    for factor in dismech.get("genetic", []):
+        gene = factor.get("gene_term", {}).get("term")
+        # Gene ids use the HGNC: form that other sources join on (AD-001). DisMech writes hgnc:.
+        object_id = "HGNC:" + gene["id"].split(":")[1] if gene else f"dismech:genetic:{factor['name']}"
+        write_association(
+            tx, disease_id, object_id, gene["label"] if gene else factor["name"],
+            "biolink:Gene" if gene else "dismech:GeneticFactor", "dismech:has_genetic_factor",
+            factor, version, description=factor.get("notes"), association_type=factor.get("association"),
+        )
+
+    for treatment in dismech.get("treatments", []):
+        term = treatment["treatment_term"]
+        # Most treatments share one generic term (NCIT:C15986), so the record's name identifies the node.
+        treatment_id = f"dismech:treatment:{treatment['name']}"
+        write_association(
+            tx, disease_id, treatment_id, treatment["name"], "biolink:Treatment", "dismech:has_recorded_treatment",
+            treatment, version, description=treatment.get("description"), ontology_term=term["term"]["id"],
+            therapeutic_modality=treatment.get("therapeutic_modality"),
+        )
+        for agent in term.get("therapeutic_agent", []):
+            tx.run(
+                """
+                MERGE (t:Entity {id: $treatment})
+                MERGE (a:Entity {id: $agent})
+                SET a.label = coalesce(a.label, $agent_label),
+                    a.category = coalesce(a.category, 'biolink:Drug'),
+                    a.source = coalesce(a.source, 'dismech'),
+                    a.source_version = coalesce(a.source_version, $version)
+                MERGE (t)-[r:HAS_AGENT]->(a)
+                SET r.source = 'dismech', r.source_version = $version, r.edge_origin = 'recorded'
+                """,
+                treatment=treatment_id,
+                agent=agent["term"]["id"],
+                agent_label=agent["preferred_term"],
+                version=version,
+            )
+
+
+def write_association(
+    tx, disease_id, object_id, object_label, object_category, predicate, record, version, *,
+    description=None, frequency=None, association_type=None, ontology_term=None, therapeutic_modality=None,
+) -> None:
+    """One DisMech record as a Disease -> Entity edge, carrying the record's first evidence item."""
+    evidence = (record.get("evidence") or [{}])[0]
+    tx.run(
+        """
+        MERGE (d:Disease {id: $disease_id})
+        MERGE (o:Entity {id: $object})
+        SET o.label = coalesce(o.label, $object_label),
+            o.category = coalesce(o.category, $object_category),
+            o.source = coalesce(o.source, 'dismech'),
+            o.source_version = coalesce(o.source_version, $version)
+        MERGE (d)-[r:ASSOCIATION {predicate: $predicate, source: 'dismech'}]->(o)
+        SET r.source_version = $version,
+            r.edge_origin = 'recorded',
+            r.record_name = $record_name,
+            r.frequency = $frequency,
+            r.association_type = $association_type,
+            r.ontology_term = $ontology_term,
+            r.therapeutic_modality = $therapeutic_modality,
+            r.description = $description,
+            r.evidence_pmid = $pmid,
+            r.evidence_snippet = $snippet,
+            r.dismech_explanation = $explanation
+        """,
+        disease_id=disease_id,
+        object=object_id,
+        object_label=object_label,
+        object_category=object_category,
+        predicate=predicate,
+        record_name=record["name"],
+        frequency=frequency,
+        association_type=association_type,
+        ontology_term=ontology_term,
+        therapeutic_modality=therapeutic_modality,
+        description=description,
+        pmid=evidence.get("reference"),
+        snippet=evidence.get("snippet"),
+        explanation=evidence.get("explanation"),
+        version=version,
+    )
 
 
 def load_graph(driver, monarch_text: str, dismech_text: str, provenance_text: str) -> dict:

@@ -9,11 +9,11 @@ Citations are stored as plain properties on the relationship they support, not a
 | Relationship | Properties | Set by |
 | --- | --- | --- |
 | `(:Disease)-[:ASSOCIATION {source: 'monarch'}]->(:Entity\|:Disease)` | `publications`, `primary_knowledge_source` | `load_monarch` in `ingestion/load_neo4j.py` |
-| `(:Disease)-[:ASSOCIATION {source: 'dismech'}]->(:Entity)` | `evidence_pmid`, `evidence_snippet`, `dismech_explanation` | `load_dismech`, from the phenotype's own `evidence[0]` |
+| `(:Disease)-[:ASSOCIATION {source: 'dismech'}]->(:Entity)` | `evidence_pmid`, `evidence_snippet`, `dismech_explanation` | `write_association`, from the phenotype, genetic or treatment record's own `evidence[0]` |
 | `(:Disease)-[:HAS_MECHANISM]->(:Mechanism)` | `evidence_pmid`, `evidence_snippet`, `dismech_explanation` | `load_dismech`, from the step's own `evidence[0]` |
 | `(:Mechanism)-[:LEADS_TO]->(:Mechanism)` | `evidence_pmid`, `evidence_snippet`, `dismech_explanation` | `load_dismech`, from that `downstream[].evidence[0]` |
 
-All DisMech relationships pull from the same shape in the raw YAML (`evidence: [{reference, snippet, explanation}]`) — a phenotype's own evidence for `ASSOCIATION`, a mechanism's own evidence for `HAS_MECHANISM`, a causal edge's evidence for `LEADS_TO`. Only the first evidence item is loaded for any of them. `kg_get_mechanism_paths` reports this as a limitation for causal edges; today every DisMech phenotype and causal edge has only one item, so only Immune Dysregulation's second citation is left out.
+All DisMech relationships pull from the same shape in the raw YAML (`evidence: [{reference, snippet, explanation}]`) — a phenotype, genetic or treatment record's own evidence for `ASSOCIATION`, a mechanism's own evidence for `HAS_MECHANISM`, a causal edge's evidence for `LEADS_TO`. Only the first evidence item is loaded for any of them. `kg_get_mechanism_paths` reports this as a limitation for causal edges; today only two second citations are left out, on Immune Dysregulation and Anti-CD38 Monoclonal Antibody Therapy. The TP53 and Hyperdiploidy records have no evidence in DisMech, so they get the limitation in section 4.
 
 ## 2. Neptune property → evidence id
 

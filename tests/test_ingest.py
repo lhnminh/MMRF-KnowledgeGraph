@@ -53,6 +53,24 @@ phenotypes:
     description: low red cells
     evidence: [{reference: "PMID:4", snippet: quoted phenotype, explanation: phenotype commentary}]
     phenotype_term: {term: {id: "HP:0001903", label: Anemia}}
+genetic:
+  - name: TP53 Deletion
+    association: Somatic
+    gene_term: {term: {id: "hgnc:11998", label: TP53}}
+    notes: deletion of 17p13
+  - name: Hyperdiploidy
+    association: Somatic
+treatments:
+  - name: Proteasome Inhibitor Therapy
+    description: targets the proteasome
+    evidence: [{reference: "PMID:5", snippet: quoted trial}]
+    treatment_term:
+      term: {id: "NCIT:C15986", label: Pharmacotherapy}
+      therapeutic_agent:
+        - {preferred_term: bortezomib, term: {id: "CHEBI:52717", label: bortezomib}}
+  - name: Autologous Stem Cell Transplantation
+    therapeutic_modality: SURGERY
+    treatment_term: {term: {id: "NCIT:C15289", label: Organ Transplantation}}
 """
 PROVENANCE = json.dumps({"source_revision": "b1ca0b2"})
 
@@ -115,7 +133,8 @@ def test_every_edge_records_its_source_version_and_origin():
     loader.load_monarch(tx, MONARCH, "2026-10-07")
     loader.load_dismech(tx, loader.yaml.safe_load(DISMECH_YAML), "b1ca0b2")
     edge_writes = [(q, p) for q, p in tx.calls if "]->(" in q]
-    assert len(edge_writes) == 6  # two associations, two mechanisms, one causal edge, one phenotype
+    # Two associations, two mechanisms, one causal edge, one phenotype, two genetic, two treatments, one agent.
+    assert len(edge_writes) == 11
     for query, parameters in edge_writes:
         assert "source_version = $version" in query and "edge_origin = 'recorded'" in query
         assert parameters["version"] in {"2026-10-07", "b1ca0b2"}
@@ -128,7 +147,8 @@ def test_monarch_and_dismech_keep_separate_edges_to_one_phenotype_node():
     monarch_query = association_call(tx, "biolink:has_phenotype")[0]
     dismech_query, parameters = next((q, p) for q, p in tx.calls if p.get("object") == "HP:0001903")
     assert "{predicate: $predicate, source: 'monarch'}" in monarch_query
-    assert "{predicate: 'biolink:has_phenotype', source: 'dismech'}" in dismech_query
+    assert "{predicate: $predicate, source: 'dismech'}" in dismech_query
+    assert parameters["predicate"] == "biolink:has_phenotype"
     assert "MERGE (o:Entity {id: $object})" in dismech_query
     # A phenotype already loaded from Monarch keeps its stored provenance.
     assert "o.source = coalesce(o.source, 'dismech')" in dismech_query
@@ -136,11 +156,36 @@ def test_monarch_and_dismech_keep_separate_edges_to_one_phenotype_node():
     assert parameters["frequency"] == "VERY_FREQUENT"
 
 
+def test_genetic_records_use_hgnc_ids_or_a_namespaced_id_without_a_gene():
+    tx = FakeTx()
+    loader.load_dismech(tx, loader.yaml.safe_load(DISMECH_YAML), "b1ca0b2")
+    factors = {p["record_name"]: p for _, p in tx.calls if p.get("predicate") == "dismech:has_genetic_factor"}
+    assert factors["TP53 Deletion"]["object"] == "HGNC:11998"
+    assert factors["TP53 Deletion"]["object_label"] == "TP53"
+    assert factors["TP53 Deletion"]["description"] == "deletion of 17p13"
+    assert factors["Hyperdiploidy"]["object"] == "dismech:genetic:Hyperdiploidy"
+    assert factors["Hyperdiploidy"]["pmid"] is None  # no evidence is recorded, and none is invented
+
+
+def test_each_treatment_is_its_own_node_linked_to_its_agents():
+    tx = FakeTx()
+    loader.load_dismech(tx, loader.yaml.safe_load(DISMECH_YAML), "b1ca0b2")
+    treatments = {p["record_name"]: p for _, p in tx.calls if p.get("predicate") == "dismech:has_recorded_treatment"}
+    assert treatments["Proteasome Inhibitor Therapy"]["object"] == "dismech:treatment:Proteasome Inhibitor Therapy"
+    assert treatments["Proteasome Inhibitor Therapy"]["ontology_term"] == "NCIT:C15986"
+    assert treatments["Autologous Stem Cell Transplantation"]["therapeutic_modality"] == "SURGERY"
+    agents = [p for q, p in tx.calls if "HAS_AGENT" in q]
+    assert [(p["treatment"], p["agent"]) for p in agents] == [
+        ("dismech:treatment:Proteasome Inhibitor Therapy", "CHEBI:52717")
+    ]
+
+
 def test_parameters_are_neptune_safe():
     tx = FakeTx()
     loader.load_monarch(tx, MONARCH, "2026-10-07")
     assert association_call(tx, "biolink:has_phenotype")[1]["publications"] == "PMID:1;PMID:2"
     assert association_call(tx, "biolink:subclass_of")[1]["publications"] == ""
+    loader.load_dismech(tx, loader.yaml.safe_load(DISMECH_YAML), "b1ca0b2")
     for _, parameters in tx.calls:
         assert not any(isinstance(value, (list, dict)) for value in parameters.values())
 

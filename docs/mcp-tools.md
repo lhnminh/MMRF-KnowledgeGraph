@@ -75,15 +75,16 @@ Each result's `content[0].text` is a JSON string holding this envelope:
 
 ## What the graph contains
 
-54 nodes and 67 relationships for multiple myeloma:
+74 nodes and 87 relationships for multiple myeloma:
 
 | Source | Version | Provides |
 | --- | --- | --- |
 | Monarch KG | `2026-10-07` | 43 associations: phenotypes, related diseases and others |
-| DisMech | `v0.1.46` (commit `b1ca0b232b815a21b4ba95a62828c9979e9a49e7`) | 8 mechanisms, 7 causal edges and 9 phenotypes |
+| DisMech | `v0.1.46` (commit `b1ca0b232b815a21b4ba95a62828c9979e9a49e7`) | 8 mechanisms, 7 causal edges, 9 phenotypes, 3 genetic factors, and 6 treatments with 11 named drugs |
 
 ```text
-(:Disease {id, name})-[:ASSOCIATION {predicate, source, source_version, edge_origin, primary_knowledge_source, publications, frequency, description, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Entity or :Disease {id, label, category})
+(:Disease {id, name})-[:ASSOCIATION {predicate, source, source_version, edge_origin, primary_knowledge_source, publications, record_name, frequency, association_type, ontology_term, therapeutic_modality, description, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Entity or :Disease {id, label, category})
+(:Entity {category: 'biolink:Treatment'})-[:HAS_AGENT {source, source_version, edge_origin}]->(:Entity {category: 'biolink:Drug'})
 (:Disease)-[:HAS_MECHANISM {source, source_version, edge_origin, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Mechanism {name, description, source, source_version})
 (:Mechanism)-[:LEADS_TO {source, source_version, edge_origin, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Mechanism)
 ```
@@ -92,9 +93,10 @@ On `ASSOCIATION`, Monarch edges use `primary_knowledge_source` and `publications
 
 **Not available yet:**
 
-- Open Targets and CIViC data, so there are no gene, drug or variant answers.
+- Open Targets and CIViC data, so there are no target or variant answers. Genes and drugs are limited to DisMech's records: `TP53` and `IGH`, and 11 named drugs.
+- A named tool that lists genes or treatments. Use `kg_search_entities`, `kg_get_evidence` or `kg_run_readonly_query`; see the example below.
 - `kg_get_gene_context`, which AD-004 plans.
-- DisMech's genetic and treatment records. Only its mechanisms and phenotypes are loaded.
+- DisMech's cell types, biological processes and locations for each mechanism.
 - Links between phenotypes and mechanisms. Anemia, for example, is a phenotype with no edge from Bone Marrow Failure. `kg_get_mechanism_paths` lists every step its mechanism descriptions state without an edge in `limitations`, beginning `Not a recorded edge:`.
 
 ## Example: what leads to hypercalcemia?
@@ -111,3 +113,16 @@ On `ASSOCIATION`, Monarch edges use `primary_knowledge_source` and `publications
    ```
 
    This returns Osteolytic Bone Disease and Clonal Plasma Cell Proliferation.
+
+## Example: which treatments and drugs are recorded?
+
+There is no named tool for this yet, so use `kg_run_readonly_query`. Change the predicate to `dismech:has_genetic_factor` and drop the `OPTIONAL MATCH` for genetic factors. Report these as recorded knowledge, not recommendations.
+
+```json
+{
+  "query": "MATCH (:Disease {id: $id})-[r:ASSOCIATION {predicate: 'dismech:has_recorded_treatment'}]->(t) OPTIONAL MATCH (t)-[:HAS_AGENT]->(a) RETURN t.label AS treatment, r.evidence_pmid AS pmid, r.source_version AS version, collect(a.label) AS agents ORDER BY treatment",
+  "parameters": { "id": "MONDO:0009693" }
+}
+```
+
+To see one record's citation and curator commentary, call `kg_get_evidence` with `edge_id`, such as `dismech:MONDO:0009693|dismech:has_recorded_treatment|dismech:treatment:CAR-T Cell Therapy`.

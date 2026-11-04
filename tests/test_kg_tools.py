@@ -36,7 +36,7 @@ def row(kind, subject, obj, **values):
         "subject_description": None, "predicate": kind, "object_id": obj, "object_label": obj,
         "object_type": "Mechanism", "object_description": None, "pmid": "PMID:1", "snippet": "quoted",
         "explanation": None, "publications": None, "primary_knowledge_source": None, "frequency": None,
-        "source": "dismech", "source_version": "b1ca0b2", "edge_origin": "recorded", **values,
+        "record_name": None, "association_type": None, "source": "dismech", "source_version": "b1ca0b2", "edge_origin": "recorded", **values,
     }
 
 
@@ -82,6 +82,30 @@ def test_mechanism_description_is_interpretation_not_observation():
 def test_described_steps_are_only_reported_for_their_disease():
     rows = [row("has_mechanism", "MONDO:1", "Bone Marrow Failure", subject_type="Disease")]
     assert not has_note(mechanism_paths(rows, "MONDO:1"), ANEMIA_NOTE)
+
+
+def test_genetic_edge_states_its_record_and_an_absent_citation_is_reported():
+    factor = row(
+        "association", MYELOMA, "HGNC:11998", subject_type="Disease", object_type="biolink:Gene", object_label="TP53",
+        predicate="dismech:has_genetic_factor", record_name="TP53 Deletion", association_type="Somatic", pmid=None,
+    )
+    env = handler.Envelope("kg_get_evidence", {}, None)
+    handler.add_edge_row(env, factor)
+    envelope = env.build("graph", "")
+    assert "Record: TP53 Deletion. Association: somatic." in envelope["observations"][0]["text"]
+    assert has_note(envelope, "No evidence reference is recorded for: dismech:MONDO:0009693|dismech:has_genetic_factor")
+
+
+def test_recorded_treatment_is_never_presented_as_a_recommendation():
+    treatment = row(
+        "association", MYELOMA, "dismech:treatment:X", subject_type="Disease", object_type="biolink:Treatment",
+        object_label="X", predicate="dismech:has_recorded_treatment", record_name="X",
+    )
+    env = handler.Envelope("kg_get_evidence", {}, None)
+    handler.add_edge_row(env, treatment)
+    envelope = env.build("graph", "")
+    assert has_note(envelope, "not a treatment recommendation")
+    assert "Record:" not in envelope["observations"][0]["text"]  # the name is already the label
 
 
 def test_phenotype_description_is_interpretation_not_observation():
