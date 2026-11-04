@@ -70,7 +70,7 @@ Each result's `content[0].text` is a JSON string holding this envelope:
 - **Always pass on `limitations`.** They say what the answer can't support.
 - **Keep the two kinds of statement apart.** `observations` are what a source record states. `interpretation` is explanation, and is not an established fact.
 - **Say "none recorded", never "none exists".** An empty result only describes this graph.
-- **Show your sources.** Each edge's `evidence_ids` point to `evidence`, and each edge has a `source_dataset` and `source_version`.
+- **Show your sources.** Each edge's `evidence_ids` point to `evidence`, and each edge has a `source_dataset` and `source_version`. See [how citations work](citations.md) for how a `refs` array gets built.
 - **Don't give treatment recommendations.** Graph content is published knowledge. It isn't clinical advice and doesn't validate a synthetic Virtual Lab result.
 
 ## What the graph contains
