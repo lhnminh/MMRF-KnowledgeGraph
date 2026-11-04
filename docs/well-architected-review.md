@@ -44,6 +44,13 @@ else is open.
   gateway's `policy_engine_configuration`, would add tool-level scoping as a second, independent
   layer. See AD-006 for why this becomes a required control, not optional hardening, if PHI ever
   enters scope.
+- **Open — X-Ray tracing is enabled but can't egress.** Both `kg-graph` and `kg-ingest` set
+  `tracing_config { mode = "Active" }` (`terraform/loader_lambda.tf`, `terraform/ingest.tf`), but
+  the VPC has no NAT/IGW and no X-Ray interface endpoint. Lambda's own function logs still reach
+  CloudWatch regardless (that path goes through the Lambda service plane, not this VPC's routing),
+  but X-Ray segments, and anything the code might call directly against Secrets Manager, KMS, or
+  STS from inside the VPC, have no egress path and fail or are silently dropped. No interface
+  endpoints are deployed today.
 
 ## Reliability
 
