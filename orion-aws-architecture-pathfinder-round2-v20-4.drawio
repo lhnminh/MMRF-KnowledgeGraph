@@ -1,0 +1,106 @@
+<mxfile host="app.diagrams.net" agent="Claude Code">
+  <diagram id="ws1-architecture" name="Workstream 1 AWS Architecture">
+    <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1700" pageHeight="900" background="#FFFFFF" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;fontSize=20;fontColor=#232F3E;fontStyle=1;" value="MMRF Knowledge Graph &amp;mdash; AWS Architecture (Workstream 1)" vertex="1">
+          <mxGeometry x="40" y="20" width="900" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" parent="1" style="text;html=1;whiteSpace=wrap;overflow=hidden;align=left;verticalAlign=top;fontSize=12;fontColor=#5F6B7A;fontStyle=2;" value="Every box is a resource in terraform/ or terraform/graph-api, verified against that code on 2026-11-04. Converted from docs/architecture.md." vertex="1">
+          <mxGeometry x="40" y="52" width="900" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="caller" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#232F3E;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;fontStyle=0;align=center;" value="SigV4-signed caller&lt;br&gt;(agent or scripts/test_gateway.py)" vertex="1">
+          <mxGeometry x="40" y="100" width="260" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="browser" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#232F3E;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;fontStyle=0;align=center;" value="Browser&lt;br&gt;(graph explorer page)" vertex="1">
+          <mxGeometry x="1300" y="100" width="260" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="gw" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#008296;strokeWidth=2;dashed=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=10;fontSize=13;fontStyle=1;fontColor=#008296;container=1;collapsible=0;" value="AgentCore Gateway (MCP, AWS_IAM authorizer)" vertex="1">
+          <mxGeometry x="40" y="200" width="300" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="target" parent="gw" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#F0FAFA;strokeColor=#008296;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;fontStyle=0;align=center;" value="kg-graph target&lt;br&gt;5 tools, incl.&amp;nbsp;&lt;b&gt;kg_run_readonly_query&lt;/b&gt;" vertex="1">
+          <mxGeometry x="20" y="50" width="260" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="vpc" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#248814;strokeWidth=2;dashed=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=10;fontSize=13;fontStyle=1;fontColor=#248814;container=1;collapsible=0;" value="Private VPC 10.90.0.0/16 &amp;mdash; 2 AZs, no IGW, no NAT" vertex="1">
+          <mxGeometry x="400" y="200" width="680" height="460" as="geometry" />
+        </mxCell>
+        <mxCell id="kggraph" parent="vpc" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#FF9900;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;fontStyle=0;align=center;" value="Lambda: mmrf-kg-kg-graph&lt;br&gt;read-only" vertex="1">
+          <mxGeometry x="40" y="50" width="260" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="kgingest" parent="vpc" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#FF9900;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;fontStyle=0;align=center;" value="Lambda: mmrf-kg-ingest&lt;br&gt;read + write" vertex="1">
+          <mxGeometry x="380" y="50" width="260" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="neptune" parent="vpc" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#FFFFFF;strokeColor=#8C4FFF;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;fontStyle=1;align=center;" value="Neptune cluster&lt;br&gt;mmrf-kg-cluster&lt;br&gt;serverless v2, 1 instance&lt;br&gt;capacity 1-8 NCU" vertex="1">
+          <mxGeometry x="40" y="180" width="260" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="s3endpoint" parent="vpc" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#147EBA;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;fontStyle=0;align=center;" value="S3 gateway VPC endpoint&lt;br&gt;(only egress path)" vertex="1">
+          <mxGeometry x="380" y="180" width="260" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="s3" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#147EBA;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;fontStyle=0;align=center;" value="S3 bucket: mmrf-kg-ingest-*&lt;br&gt;raw source files&lt;br&gt;SSE-AES256, public access blocked" vertex="1">
+          <mxGeometry x="470" y="710" width="300" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="graphapi" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#5F6B7A;strokeWidth=2;dashed=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=10;fontSize=13;fontStyle=1;fontColor=#5F6B7A;container=1;collapsible=0;" value="Independent stack: terraform/graph-api" vertex="1">
+          <mxGeometry x="1300" y="200" width="320" height="260" as="geometry" />
+        </mxCell>
+        <mxCell id="apigw" parent="graphapi" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#147EBA;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;fontStyle=0;align=center;" value="API Gateway HTTP API&lt;br&gt;5 rps / burst 20" vertex="1">
+          <mxGeometry x="30" y="50" width="260" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="apilambda" parent="graphapi" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#FF9900;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;fontStyle=0;align=center;" value="Lambda: mmrf-kg-graph-api&lt;br&gt;bearer-token check" vertex="1">
+          <mxGeometry x="30" y="150" width="260" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="cw" parent="1" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#5F6B7A;strokeWidth=1.5;fontColor=#232F3E;fontSize=12;fontStyle=0;align=center;" value="CloudWatch&lt;br&gt;log groups (14d) for both Lambdas, Gateway, Neptune audit&lt;br&gt;metric filter -&amp;gt; alarm -&amp;gt; SNS -&amp;gt; email" vertex="1">
+          <mxGeometry x="1300" y="710" width="320" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;fontColor=#232F3E;strokeColor=#232F3E;" value="MCP call" edge="1" source="caller" target="gw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;fontColor=#232F3E;strokeColor=#232F3E;" value="InvokeFunction" edge="1" source="target" target="kggraph">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;fontColor=#232F3E;strokeColor=#232F3E;" value="Bolt 8182 (openCypher), SigV4-signed&lt;br&gt;read-only by app-layer guard; IAM auth pending" edge="1" source="kggraph" target="neptune">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;fontColor=#232F3E;strokeColor=#232F3E;" value="Bolt 8182 (openCypher), SigV4-signed&lt;br&gt;read+write; IAM auth pending" edge="1" source="kgingest" target="neptune">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;fontColor=#232F3E;strokeColor=#232F3E;" value="GetObject via endpoint" edge="1" source="kgingest" target="s3endpoint">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;fontColor=#232F3E;strokeColor=#232F3E;" value="gateway endpoint" edge="1" source="s3endpoint" target="s3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;fontColor=#232F3E;strokeColor=#232F3E;" value="HTTPS + bearer token" edge="1" source="browser" target="apigw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;fontColor=#232F3E;strokeColor=#232F3E;" value="" edge="1" source="apigw" target="apilambda">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;fontColor=#232F3E;strokeColor=#232F3E;" value="InvokeFunction, fixed query&lt;br&gt;(kg_run_readonly_query only)" edge="1" source="apilambda" target="kggraph">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;fontSize=10;fontColor=#5F6B7A;strokeColor=#5F6B7A;" value="logs" edge="1" source="kggraph" target="cw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;fontSize=10;fontColor=#5F6B7A;strokeColor=#5F6B7A;" value="logs" edge="1" source="kgingest" target="cw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;fontSize=10;fontColor=#5F6B7A;strokeColor=#5F6B7A;" value="vended logs" edge="1" source="gw" target="cw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e13" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;fontSize=10;fontColor=#5F6B7A;strokeColor=#5F6B7A;" value="audit log" edge="1" source="neptune" target="cw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
