@@ -7,6 +7,7 @@ the kg-ingest Lambda, which reads the same three files from S3 and writes to Nep
 graph-encoded edges (predicate/evidence_pmid) so the agent never presents it as fact.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -336,6 +337,112 @@ def parse_drug_targets(text: str) -> tuple[dict, str]:
     return data, version
 
 
+def parse_clinical_trials(text, provenance_text, dismech_records):
+    """Validate a small registry snapshot and every cross-source join before any writes."""
+    provenance = json.loads(provenance_text)
+    if provenance.get("sha256") != hashlib.sha256(text.encode()).hexdigest():
+        raise ValueError("Clinical trial snapshot checksum does not match its provenance")
+    data = json.loads(text)
+    if (data.get("schema_version") != "1" or data.get("source") != "clinicaltrials_gov"
+            or not data.get("source_version") or not data.get("retrieved_at")
+            or provenance.get("source_version") != data["source_version"]):
+        raise ValueError("Clinical trial snapshot is unversioned or has an unsupported schema")
+    studies = data.get("studies", [])
+    if not 0 < len(studies) <= 20 or not 0 < len(data.get("links", [])) <= 100:
+        raise ValueError("Clinical trial snapshot exceeds the small incremental-load bounds")
+    ids = [s.get("protocolSection", {}).get("identificationModule", {}).get("nctId", "") for s in studies]
+    if len(set(ids)) != len(ids) or not all(re.fullmatch(r"NCT\d{8}", identifier) for identifier in ids):
+        raise ValueError("Clinical trial identifiers are missing, invalid or duplicated")
+    allowed, versions = set(), {}
+    for record, version in dismech_records:
+        disease = record["disease_term"]["term"]["id"]
+        versions[disease] = version
+        for treatment in record.get("treatments", []):
+            for evidence in treatment.get("evidence") or []:
+                if evidence.get("evidence_source") == "HUMAN_CLINICAL":
+                    allowed.add((disease, f"dismech:treatment:{treatment['name']}", evidence.get("reference"), version))
+    seen = set()
+    cross_refs = data.get("pubmed", {}).get("cross_references", {})
+    for link in data["links"]:
+        key = (link.get("disease_id"), link.get("treatment_id"), link.get("reference"), link.get("dismech_version"))
+        reference = link.get("reference", "")
+        if (key not in allowed or not re.fullmatch(r"PMID:\d+", reference)
+                or link.get("nct_id") not in ids
+                or link["nct_id"] not in cross_refs.get(reference.split(":")[1], [])
+                or link.get("match_basis") != "pubmed_structured_registry_accession"):
+            raise ValueError("Clinical trial link is not backed by the selected DisMech/PubMed sources")
+        identity = (*key[:3], link["nct_id"])
+        if identity in seen:
+            raise ValueError("Clinical trial snapshot contains duplicate links")
+        seen.add(identity)
+    if {link["nct_id"] for link in data["links"]} != set(ids):
+        raise ValueError("Clinical trial snapshot contains studies without a source-backed link")
+    source_versions = {source["disease_id"]: source["source_version"] for source in data.get("dismech_sources", [])}
+    if not source_versions or any(versions.get(disease) != version for disease, version in source_versions.items()):
+        raise ValueError("Clinical trial source revisions differ from the selected DisMech records")
+    return data, provenance
+
+
+def load_clinical_trials(tx, data, provenance):
+    """Registry metadata plus explicit publication cross-reference paths; no inferred efficacy."""
+    metadata = {
+        "version": data["source_version"], "retrieved_at": data["retrieved_at"],
+        "raw_s3_uri": provenance.get("snapshot_s3_uri"), "raw_sha256": provenance["sha256"],
+        "pubmed_s3_uri": provenance.get("pubmed_s3_uri"), "pubmed_sha256": data["pubmed"]["sha256"],
+    }
+    for study in data["studies"]:
+        protocol = study["protocolSection"]
+        identity, status, design = (protocol["identificationModule"], protocol.get("statusModule", {}),
+                                    protocol.get("designModule", {}))
+        identifier = identity["nctId"]
+        enrollment = design.get("enrollmentInfo", {})
+        # Full upstream records, including aggregate results, stay in S3. These are registry metadata only.
+        tx.run(
+            """MERGE (t:ClinicalTrial {id: $id})
+            SET t.name = $title, t.label = $label, t.brief_title = $title,
+                t.category = 'biolink:ClinicalTrial', t.source = 'clinicaltrials_gov',
+                t.source_version = $version, t.source_url = $source_url, t.retrieved_at = $retrieved_at,
+                t.study_phase = $phase, t.study_status = $status, t.study_type = $study_type,
+                t.enrollment_count = $enrollment_count, t.enrollment_type = $enrollment_type,
+                t.registry_last_update = $last_update, t.has_results = $has_results,
+                t.conditions_json = $conditions, t.interventions_json = $interventions,
+                t.raw_s3_uri = $raw_s3_uri, t.raw_sha256 = $raw_sha256""",
+            id=identifier, title=identity["briefTitle"], label=identity.get("acronym") or identifier,
+            source_url=f"https://clinicaltrials.gov/study/{identifier}",
+            phase=";".join(design.get("phases", [])), status=status.get("overallStatus"),
+            study_type=design.get("studyType"), enrollment_count=enrollment.get("count"),
+            enrollment_type=enrollment.get("type"), last_update=status.get("lastUpdatePostDateStruct", {}).get("date"),
+            has_results=study.get("hasResults"),
+            conditions=json.dumps(protocol.get("conditionsModule", {}).get("conditions", [])),
+            interventions=json.dumps(protocol.get("armsInterventionsModule", {}).get("interventions", [])),
+            **{key: metadata[key] for key in ("version", "retrieved_at", "raw_s3_uri", "raw_sha256")},
+        )
+    # Group references so a later citation never overwrites an earlier citation on the same path.
+    disease_links, treatment_links = {}, {}
+    for link in data["links"]:
+        disease_links.setdefault((link["disease_id"], link["nct_id"], link["dismech_version"]), set()).add(link["reference"])
+        treatment_links.setdefault((link["disease_id"], link["treatment_id"], link["nct_id"], link["dismech_version"]), set()).add(link["reference"])
+    stamp = """SET r.source = 'clinicaltrials_gov', r.source_version = $version,
+        r.clinical_trial_id = $trial,
+        r.edge_origin = 'derived_from_source_cross_reference', r.mapping_basis = 'pubmed_structured_registry_accession',
+        r.dismech_source_version = $dismech_version, r.publications = $references,
+        r.source_url = $source_url, r.retrieved_at = $retrieved_at,
+        r.raw_s3_uri = $raw_s3_uri, r.raw_sha256 = $raw_sha256,
+        r.pubmed_s3_uri = $pubmed_s3_uri, r.pubmed_sha256 = $pubmed_sha256"""
+    for (disease, nct, version), refs in disease_links.items():
+        tx.run("""MATCH (d:Disease {id: $disease}) MATCH (t:ClinicalTrial {id: $trial})
+            MERGE (d)-[r:HAS_CLINICAL_TRIAL {source: 'clinicaltrials_gov'}]->(t)
+            SET r.predicate = 'clinicaltrials:has_registered_study'
+            """ + stamp, disease=disease, trial=nct, dismech_version=version,
+            references=";".join(sorted(refs)), source_url=f"https://clinicaltrials.gov/study/{nct}", **metadata)
+    for (disease, treatment, nct, version), refs in treatment_links.items():
+        tx.run("""MATCH (a:Entity {id: $treatment}) MATCH (t:ClinicalTrial {id: $trial})
+            MERGE (a)-[r:HAS_CLINICAL_TRIAL {source: 'clinicaltrials_gov', disease_id: $disease}]->(t)
+            SET r.predicate = 'clinicaltrials:publication_registry_cross_reference'
+            """ + stamp, disease=disease, treatment=treatment, trial=nct, dismech_version=version,
+            references=";".join(sorted(refs)), source_url=f"https://clinicaltrials.gov/study/{nct}", **metadata)
+
+
 def load_drug_targets(tx, data: dict, version: str) -> None:
     """Drug -> gene edges from Open Targets, one per (drug, gene) with its mechanisms joined into strings.
 
@@ -398,8 +505,14 @@ def write_association(
     tx, disease_id, object_id, object_label, object_category, predicate, record, version, *,
     description=None, frequency=None, association_type=None, ontology_term=None, therapeutic_modality=None,
 ) -> None:
-    """One DisMech record as a Disease -> Entity edge, carrying the record's first evidence item."""
-    evidence = (record.get("evidence") or [{}])[0]
+    """Preserve all source evidence; keep first-citation fields for existing agent tools.
+
+    JSON preserves each citation's title, source classification, support status,
+    snippet and curator explanation without turning those into inferred trial facts.
+    Properties remain strings/scalars for Neptune openCypher compatibility.
+    """
+    evidence_items = record.get("evidence") or []
+    evidence = (evidence_items or [{}])[0]
     tx.run(
         """
         MERGE (d:Disease {id: $disease_id})
@@ -417,6 +530,9 @@ def write_association(
             r.ontology_term = $ontology_term,
             r.therapeutic_modality = $therapeutic_modality,
             r.description = $description,
+            r.evidence_json = $evidence_json,
+            r.evidence_count = $evidence_count,
+            r.publications = $publications,
             r.evidence_pmid = $pmid,
             r.evidence_snippet = $snippet,
             r.dismech_explanation = $explanation
@@ -432,6 +548,11 @@ def write_association(
         ontology_term=ontology_term,
         therapeutic_modality=therapeutic_modality,
         description=description,
+        evidence_json=json.dumps(evidence_items, ensure_ascii=False),
+        evidence_count=len(evidence_items),
+        publications=";".join(dict.fromkeys(
+            item["reference"] for item in evidence_items if item.get("reference")
+        )),
         pmid=evidence.get("reference"),
         snippet=evidence.get("snippet"),
         explanation=evidence.get("explanation"),
@@ -460,13 +581,18 @@ def load_graph(driver, monarch_text: str, dismech_text: str, provenance_text: st
     return load_graphs(driver, [(monarch_text, dismech_text, provenance_text)])
 
 
-def load_graphs(driver, sources: list[tuple[str, str, str]], drug_targets_text: "str | None" = None) -> dict:
+def load_graphs(driver, sources: list[tuple[str, str, str]], drug_targets_text: "str | None" = None,
+                clinical_trials_text=None, clinical_trials_provenance_text=None) -> dict:
     """Load each (monarch_text, dismech_text, provenance_text) set, then report what the graph holds.
 
     Drug targets, if given, load last because they attach to agents that the DisMech records create.
     Every input is parsed, and refused if unversioned, before anything is written."""
     parsed = [parse_sources(*texts) for texts in sources]
     drug_targets = parse_drug_targets(drug_targets_text) if drug_targets_text else None
+    clinical_trials = parse_clinical_trials(
+        clinical_trials_text, clinical_trials_provenance_text,
+        [(dismech, version) for _, dismech, _, version in parsed],
+    ) if clinical_trials_text else None
     monarch_versions, dismech_versions = set(), set()
     with driver.session() as session:
         for monarch, dismech, monarch_version, dismech_version in parsed:
@@ -476,6 +602,8 @@ def load_graphs(driver, sources: list[tuple[str, str, str]], drug_targets_text: 
             dismech_versions.add(dismech_version)
         if drug_targets:
             _execute_write_with_retry(session, load_drug_targets, *drug_targets)
+        if clinical_trials:
+            _execute_write_with_retry(session, load_clinical_trials, *clinical_trials)
         nodes = session.execute_read(lambda tx: tx.run("MATCH (n) RETURN count(n) AS c").single()["c"])
         edges = session.execute_read(lambda tx: tx.run("MATCH ()-[r]->() RETURN count(r) AS c").single()["c"])
     return {
@@ -522,6 +650,8 @@ def lambda_handler(event, context) -> dict:
         ],
         # {"drug_targets": true} also loads raw/drug_targets.json (Open Targets), after the records above.
         read(DRUG_TARGETS_FILE) if (event or {}).get("drug_targets") is True else None,
+        clinical_trials_text=read("clinical_trials.json") if (event or {}).get("clinical_trials") is True else None,
+        clinical_trials_provenance_text=read("clinical_trials.json.provenance.json") if (event or {}).get("clinical_trials") is True else None,
     )
     print(json.dumps({"event": "kg_ingest", **result}))
     return result
@@ -534,6 +664,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sources", nargs="+", default=["mm"], help="names such as mm jmml")
     parser.add_argument("--drug-targets", action="store_true", help=f"also load {DRUG_TARGETS_FILE}")
+    parser.add_argument("--clinical-trials", action="store_true", help="also load the verified clinical_trials.json snapshot")
     args = parser.parse_args()
     names = source_names({"sources": args.sources})
     driver = GraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
@@ -541,6 +672,8 @@ def main() -> None:
         driver,
         [(read(f"monarch_{n}.json"), read(f"dismech_{n}.yaml"), read(f"dismech_{n}.yaml.provenance.json")) for n in names],
         read(DRUG_TARGETS_FILE) if args.drug_targets else None,
+        clinical_trials_text=read("clinical_trials.json") if args.clinical_trials else None,
+        clinical_trials_provenance_text=read("clinical_trials.json.provenance.json") if args.clinical_trials else None,
     )
     driver.close()
     print(f"Loaded Monarch associations and DisMech records into Neo4j: {result}")

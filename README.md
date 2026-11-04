@@ -4,6 +4,11 @@ A myeloma knowledge graph in Amazon Neptune, exposed to agents as named tools th
 
 No real patient data, customer credentials, or customer infrastructure is needed.
 
+The registered-trial subset links DisMech treatment publications through PubMed
+to eight ClinicalTrials.gov records (six MM, two JMML). See
+[clinical trial ingestion and visualization](docs/clinical-trials.md) for the
+source → S3 → Neptune workflow, validation and notebook queries.
+
 ## Graph pipeline
 
 To explore the ETL export in local Neo4j Browser:

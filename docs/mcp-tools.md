@@ -98,13 +98,14 @@ Every tool declares an `outputSchema` matching this shape, so a client that nego
 
 ## What the graph contains
 
-164 nodes and 289 relationships for multiple myeloma (MM) and juvenile myelomonocytic leukemia (JMML, `MONDO:0011908`):
+172 nodes and 305 relationships for multiple myeloma (MM) and juvenile myelomonocytic leukemia (JMML, `MONDO:0011908`):
 
 | Source | Version | Provides |
 | --- | --- | --- |
 | Monarch KG | `2026-10-07` | MM: 43 associations (phenotypes, related diseases and others). JMML: 5, including the gene-level KRAS association (`HGNC:6407`, Orphanet) |
 | DisMech | `v0.1.46` (commit `b1ca0b232b815a21b4ba95a62828c9979e9a49e7`) | MM: 8 mechanisms, 7 causal edges, 9 phenotypes, 3 genetic factors, and 6 treatments with 11 named drugs. JMML: 5 mechanisms, 5 subtypes with their driver genes, 7 genetic factors, 3 treatments each linked to a mechanism |
 | Open Targets | `26.09` | 144 drug-to-gene edges (`TARGETS_GENE`) for the 13 drug agents named in the DisMech treatments, with the FDA label or document that supports each. Not its gene-disease associations or other data |
+| ClinicalTrials.gov / PubMed | Registry data timestamp `2026-11-04T10:00:04` | 8 registered studies (6 MM, 2 JMML), 8 disease-to-trial and 8 treatment-to-trial paths backed by structured PubMed registry accessions. Phase, status and enrollment are registry metadata, not efficacy findings. Use `kg_run_readonly_query`; see [trial queries and ingestion](clinical-trials.md). |
 
 ```text
 (:Disease {id, name})-[:ASSOCIATION {predicate, source, source_version, edge_origin, primary_knowledge_source, publications, record_name, frequency, association_type, ontology_term, therapeutic_modality, description, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Entity or :Disease {id, label, category})

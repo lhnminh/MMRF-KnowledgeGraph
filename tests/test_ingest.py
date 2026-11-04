@@ -190,6 +190,42 @@ def test_parameters_are_neptune_safe():
         assert not any(isinstance(value, (list, dict)) for value in parameters.values())
 
 
+def test_all_treatment_citations_and_original_metadata_are_preserved():
+    dismech = loader.yaml.safe_load(DISMECH_YAML)
+    evidence = [
+        {"reference": "PMID:5", "reference_title": "Synthetic trial citation",
+         "evidence_source": "HUMAN_CLINICAL", "supports": "SUPPORT",
+         "snippet": "source quotation", "explanation": "curator interpretation"},
+        {"reference": "PMID:6", "reference_title": "Synthetic guideline citation",
+         "evidence_source": "OTHER", "supports": "PARTIAL", "review_status": "example"},
+        {"reference": "PMID:5", "supports": "REFUTE", "explanation": "another source excerpt"},
+        {"explanation": "Evidence item without a reference must also survive"},
+    ]
+    dismech["treatments"][0]["evidence"] = evidence
+    tx = FakeTx()
+    loader.load_dismech(tx, dismech, "b1ca0b2")
+    query, parameters = association_call(tx, "dismech:has_recorded_treatment")
+    assert json.loads(parameters["evidence_json"]) == evidence
+    assert parameters["evidence_count"] == 4
+    assert parameters["publications"] == "PMID:5;PMID:6"
+    assert parameters["pmid"] == "PMID:5"  # existing tools remain compatible
+    for name in ("evidence_json", "evidence_count", "publications"):
+        assert f"r.{name} = ${name}" in query
+    # Evidence belongs to the disease/treatment relationship, not a shared treatment node.
+    assert "MERGE (d)-[r:ASSOCIATION {predicate: $predicate, source: 'dismech'}]->(o)" in query
+
+
+def test_missing_evidence_writes_empty_values_instead_of_leaving_old_citations():
+    tx = FakeTx()
+    loader.load_dismech(tx, loader.yaml.safe_load(DISMECH_YAML), "b1ca0b2")
+    _, parameters = next((q, p) for q, p in tx.calls
+                         if p.get("record_name") == "Autologous Stem Cell Transplantation")
+    assert parameters["evidence_json"] == "[]"
+    assert parameters["evidence_count"] == 0
+    assert parameters["publications"] == ""
+    assert parameters["pmid"] is None
+
+
 def test_commentary_stays_separate_from_the_evidence_fields():
     tx = FakeTx()
     loader.load_dismech(tx, loader.yaml.safe_load(DISMECH_YAML), "b1ca0b2")

@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 const filterIds = ['view', 'source', 'entity_type', 'predicate', 'q'];
 let data = null, cy = null, controller = null, sequence = 0, timer;
 const element = (tag, text) => { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; return node; };
-const prettify = value => value === 'opentargets' ? 'Open Targets' : value.replace(/^biolink:|^dismech:/, '').replaceAll('_', ' ');
+const prettify = value => value === 'opentargets' ? 'Open Targets' : value === 'clinicaltrials_gov' ? 'ClinicalTrials.gov' : value.replace(/^biolink:|^dismech:|^clinicaltrials:/, '').replaceAll('_', ' ');
 const overlay = (text, error = false) => { $('overlay').textContent = text; $('overlay').hidden = !text; $('overlay').classList.toggle('error', error); };
 function note(text) { $('details').append(element('p', text)); }
 function heading(text) { $('details').append(element('h3', text)); }
@@ -21,7 +21,7 @@ function showSource(source) {
 function home() {
   $('details').replaceChildren(element('h2', 'Explore the recorded evidence'));
   note('Select a node or arrow to inspect its identifiers, source version, and available references.');
-  note('Blue arrows show Monarch records; amber arrows show DisMech records; teal arrows show Open Targets drug targets. An association alone does not establish a causal mechanism.');
+  note('Blue arrows show Monarch records; amber arrows show DisMech records; teal arrows show Open Targets drug targets; purple arrows link registered trials through publication identifiers. An association alone does not establish a causal mechanism.');
   if (data) note(`Queried from AWS Neptune at ${new Date(data.meta.fetched_at).toLocaleString()}.`);
 }
 function highlight(nodeIds, edgeIds) {
@@ -35,9 +35,10 @@ function selectNode(id) {
   $('details').replaceChildren(element('h2', node.label)); note(node.type); $('details').append(element('code', node.id));
   if (node.aliases?.length) note(`Also recorded as: ${node.aliases.join('; ')}`);
   heading('Source provenance'); node.sources.forEach(showSource);
-  for (const key of ['confidence', 'review_status', 'retrieved_at', 'synthetic']) {
+  for (const key of ['brief_title', 'study_phase', 'study_status', 'study_type', 'enrollment_count', 'enrollment_type', 'registry_last_update', 'has_results', 'confidence', 'review_status', 'retrieved_at', 'synthetic']) {
     if (node[key] !== undefined && node[key] !== null) note(`${prettify(key)}: ${node[key]}`);
   }
+  if (node.type === 'ClinicalTrial') note('Enrollment and status are reported by the registry. This link does not identify a treatment arm or establish efficacy.');
   heading('Visible connections');
   incident.forEach(edge => {
     const otherId = edge.source === id ? edge.target : edge.source;
@@ -55,7 +56,7 @@ function selectEdge(id) {
   $('details').append(element('code', edge.original_id || edge.tool_edge_id));
   showSource({source_dataset: edge.source_dataset, source_version: edge.source_version, url: edge.source_url});
   heading('Relationship metadata');
-  for (const key of ['relationship_type', 'identifier_origin', 'edge_origin', 'confidence', 'review_status', 'retrieved_at', 'synthetic', 'frequency', 'chembl_id', 'action_type', 'mechanism_of_action']) {
+  for (const key of ['relationship_type', 'identifier_origin', 'edge_origin', 'mapping_basis', 'dismech_source_version', 'clinical_trial_id', 'confidence', 'review_status', 'retrieved_at', 'synthetic', 'frequency', 'chembl_id', 'action_type', 'mechanism_of_action']) {
     if (edge[key] !== undefined && edge[key] !== null) note(`${prettify(key)}: ${edge[key]}`);
   }
   heading('Recorded references');
@@ -72,7 +73,7 @@ function updateFacets(facets) {
 }
 function renderGraph() {
   cy?.destroy();
-  const colors = {Disease: '#b8a1ff', PhenotypicFeature: '#80bcf5', Mechanism: '#f7c66b', Gene: '#7de0b3', 'dismech:GeneticFactor': '#7de0b3', Drug: '#ed9bcd', Treatment: '#ed9bcd'};
+  const colors = {Disease: '#b8a1ff', PhenotypicFeature: '#80bcf5', Mechanism: '#f7c66b', Gene: '#7de0b3', 'dismech:GeneticFactor': '#7de0b3', Drug: '#ed9bcd', Treatment: '#ed9bcd', ClinicalTrial: '#c4a5ff'};
   const nodes = data.graph.nodes.map(n => ({data: {...n, color: colors[n.type] || '#a9b8ce'}}));
   const edges = data.graph.edges.map(e => ({data: {...e, shortLabel: prettify(e.predicate)}}));
   cy = cytoscape({container: $('graph'), elements: [...nodes, ...edges], minZoom: 0.12, maxZoom: 3,
@@ -80,9 +81,11 @@ function renderGraph() {
       {selector: 'node', style: {'background-color': 'data(color)', width: 28, height: 28, label: 'data(label)', color: '#dce6f5', 'font-size': 11, 'text-wrap': 'wrap', 'text-max-width': 125, 'text-valign': 'bottom', 'text-margin-y': 7, 'border-width': 1, 'border-color': '#dce6f555'}},
       {selector: 'node[type="Disease"]', style: {width: 52, height: 52, 'font-size': 13, 'font-weight': 700}},
       {selector: 'node[type="Mechanism"]', style: {shape: 'round-rectangle', width: 100, height: 34, 'text-valign': 'center', 'text-margin-y': 0, color: '#261e12', 'text-max-width': 93, 'font-size': 9}},
+      {selector: 'node[type="ClinicalTrial"]', style: {shape: 'hexagon', width: 38, height: 38}},
       {selector: 'edge', style: {width: 1.5, 'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'arrow-scale': 0.8, 'line-color': '#689ed1', 'target-arrow-color': '#689ed1', opacity: 0.7, 'font-size': 8, color: '#b3c3d8', 'text-background-color': '#101b2d', 'text-background-opacity': 0.85, 'text-background-padding': '3px', 'text-rotation': 'autorotate'}},
       {selector: 'edge[source_dataset="dismech"]', style: {'line-color': '#bd9452', 'target-arrow-color': '#bd9452'}},
       {selector: 'edge[source_dataset="opentargets"]', style: {'line-color': '#4bc5b8', 'target-arrow-color': '#4bc5b8'}},
+      {selector: 'edge[source_dataset="clinicaltrials_gov"]', style: {'line-color': '#c4a5ff', 'target-arrow-color': '#c4a5ff'}},
       {selector: 'edge[relationship_type="HAS_MECHANISM"]', style: {'line-style': 'dashed'}},
       {selector: '.dim', style: {opacity: 0.14, 'text-opacity': 0.14}},
       {selector: ':selected', style: {'border-width': 3, 'border-color': '#ffffff', 'line-color': '#ffffff', 'target-arrow-color': '#ffffff'}}
@@ -125,6 +128,7 @@ $('filters').onsubmit = event => event.preventDefault();
 filterIds.filter(id => id !== 'q').forEach(id => $(id).onchange = () => {
   clearTimeout(timer);
   if (id === 'source' && $('source').value === 'opentargets' && !['all', 'treatments'].includes($('view').value)) $('view').value = 'treatments';
+  if (id === 'source' && $('source').value === 'clinicaltrials_gov' && !['all', 'clinical_trials'].includes($('view').value)) $('view').value = 'clinical_trials';
   loadGraph();
 });
 $('q').oninput = () => {clearTimeout(timer); timer = setTimeout(loadGraph, 400);};

@@ -148,6 +148,36 @@ def test_only_allowed_paths_and_methods_are_available(tool):
     assert not tool
 
 
+def test_clinical_trials_view_preserves_registry_metadata_and_citations(monkeypatch):
+    data = table_result()
+    disease = data["table"]["rows"][0][0]
+    data["table"]["rows"] = [[disease, {"type": "HAS_CLINICAL_TRIAL", "properties": {
+        "source": "clinicaltrials_gov", "source_version": "2026-11-04T10:00:04",
+        "predicate": "clinicaltrials:has_registered_study", "publications": "PMID:123",
+        "clinical_trial_id": "NCT00000001", "mapping_basis": "pubmed_structured_registry_accession",
+    }}, {"labels": ["ClinicalTrial"], "properties": {
+        "id": "NCT00000001", "name": "Synthetic registry title", "label": "DEMO",
+        "category": "biolink:ClinicalTrial", "source": "clinicaltrials_gov",
+        "source_version": "2026-11-04T10:00:04", "study_phase": "PHASE2",
+        "study_status": "COMPLETED", "enrollment_count": 12, "enrollment_type": "ACTUAL",
+        "interventions_json": "PRIVATE SOURCE RECORD", "original_json": "PRIVATE ARTICLE TEXT",
+    }}]]
+
+    def invoke(*args, **kwargs):
+        return data if kwargs["query"] == api.QUERY else {"table": {"columns": ["a", "r", "b"], "rows": []}}
+
+    monkeypatch.setattr(api, "invoke_tool", invoke)
+    response = api.handler(event({"view": "clinical_trials", "source": "clinicaltrials_gov"}), None)
+    assert response["statusCode"] == 200
+    result = json.loads(response["body"])
+    trial = next(n for n in result["graph"]["nodes"] if n["type"] == "ClinicalTrial")
+    assert trial["study_phase"] == "PHASE2" and trial["enrollment_count"] == 12
+    assert trial["sources"][0]["url"] == "https://clinicaltrials.gov/study/NCT00000001"
+    assert result["graph"]["edges"][0]["source_url"] == "https://clinicaltrials.gov/study/NCT00000001"
+    assert result["evidence"][0]["reference"] == "PMID:123"
+    assert "PRIVATE" not in response["body"]
+
+
 def target_rows(count):
     return [[
         {"labels": ["Entity"], "properties": {

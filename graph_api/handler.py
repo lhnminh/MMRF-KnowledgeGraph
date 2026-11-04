@@ -16,7 +16,8 @@ MAX_FETCH_EDGES = MAX_EDGES * (1 + MAX_TARGET_PAGES)
 QUERY = """MATCH (d:Disease {id: $disease_id})-[r]->(b)
 RETURN d AS a, r, b
 UNION
-MATCH (:Disease {id: $disease_id})-[:HAS_MECHANISM|ASSOCIATION]->(a)-[r:LEADS_TO|HAS_AGENT]->(b)
+MATCH (:Disease {id: $disease_id})-[:HAS_MECHANISM|ASSOCIATION]->(a)-[r:LEADS_TO|HAS_AGENT|HAS_CLINICAL_TRIAL]->(b)
+WHERE type(r) <> 'HAS_CLINICAL_TRIAL' OR r.disease_id = $disease_id
 RETURN a, r, b"""
 TARGET_QUERY = """MATCH (:Disease {id: $disease_id})
 -[:ASSOCIATION {source: 'dismech', predicate: 'dismech:has_recorded_treatment'}]->(:Entity)
@@ -29,12 +30,14 @@ CLINICAL_IDS = {
     "HP:0002653", "HP:0002797", "HP:0000938", "HP:0002756", "HP:0002953",
     "HP:0000112", "HP:0001919", "HP:0000100", "HP:0003259", "HP:0003072", "HP:0001903",
 }
-VIEWS = {"all", "clinical", "phenotypes", "mechanisms", "genetics", "treatments"}
+VIEWS = {"all", "clinical", "phenotypes", "mechanisms", "genetics", "treatments", "clinical_trials"}
 PARAMETERS = {"disease_id", "view", "source", "entity_type", "predicate", "q", "node_id", "limit"}
 METADATA = (
     "confidence", "review_status", "retrieved_at", "synthetic", "source_url", "frequency",
     "association_type", "ontology_term", "therapeutic_modality", "record_name",
     "chembl_id", "action_type", "mechanism_of_action",
+    "brief_title", "study_phase", "study_status", "study_type", "enrollment_count", "enrollment_type",
+    "registry_last_update", "has_results", "mapping_basis", "dismech_source_version", "clinical_trial_id",
 )
 ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -115,6 +118,10 @@ def source_url(dataset, version, record_id=None):
         if re.fullmatch(r"CHEMBL\d+", str(record_id)):
             return f"https://platform.opentargets.org/drug/{record_id}"
         return "https://platform.opentargets.org/"
+    if dataset == "clinicaltrials_gov":
+        if re.fullmatch(r"NCT\d{8}", str(record_id)):
+            return f"https://clinicaltrials.gov/study/{record_id}"
+        return "https://clinicaltrials.gov/"
     return None
 
 
@@ -162,7 +169,7 @@ def graph_from_table(result):
                        for item in node["sources"]):
                 node["sources"].append({
                     "source_dataset": dataset, "source_version": version,
-                    "url": source_url(dataset, version), "basis": basis,
+                    "url": source_url(dataset, version, record.get("clinical_trial_id") or record.get("id")), "basis": basis,
                 })
         if not node["sources"]:
             node["sources"].append({
@@ -206,7 +213,7 @@ def graph_from_table(result):
             "source": a, "target": b,
             "predicate": predicate, "relationship_type": kind,
             "source_dataset": dataset, "source_version": version,
-            "source_url": source_url(dataset, version, props.get("chembl_id")),
+            "source_url": source_url(dataset, version, props.get("clinical_trial_id") or props.get("chembl_id")),
             "edge_origin": props.get("edge_origin", "unrecorded"),
             "evidence_ids": evidence_ids, **{key: props[key] for key in METADATA if key in props},
         }
@@ -238,6 +245,8 @@ def filter_graph(graph, filters):
     for edge in graph["edges"]:
         endpoints = [nodes[edge["source"]], nodes[edge["target"]]]
         if view == "phenotypes" and edge["predicate"] != "biolink:has_phenotype":
+            continue
+        if view == "clinical_trials" and edge["relationship_type"] != "HAS_CLINICAL_TRIAL":
             continue
         if view == "mechanisms" and edge["relationship_type"] not in {"HAS_MECHANISM", "LEADS_TO"}:
             continue
@@ -323,6 +332,7 @@ def get_graph(params):
     limitations.extend([
         "This is a disease-centred graph with a third hop limited to recorded drug targets, capped at 100 displayed relationships; it is not a full database export.",
         "Open Targets drug-to-gene mechanisms are a separate source from DisMech treatment and trial evidence.",
+        "ClinicalTrials.gov studies are linked through structured PubMed registry accessions from DisMech treatment citations; this is a bounded subset, not all trials. Trial status and enrollment are registry metadata, not evidence of efficacy.",
         "Phenotype associations and source-reported mechanisms do not establish links between mechanisms and phenotypes.",
         "Article snippets and curator descriptions are omitted; citation identifiers and source versions are retained.",
         "Recorded treatments are published knowledge, not treatment recommendations. No patient or cohort data is returned.",
