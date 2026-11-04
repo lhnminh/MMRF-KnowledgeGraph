@@ -192,13 +192,13 @@ resource "aws_cloudwatch_log_delivery" "kg_gateway" {
 
 # Lets Workstream 2's orchestrator agent call this Gateway. The role is theirs, created outside
 # this stack; the data source just looks it up so our policy can attach to it.
-data "aws_iam_role" "smoke_agent_runtime" {
-  name = "mmrf-smoke-agent-runtime"
+data "aws_iam_role" "orchestrator_agent_runtime" {
+  name = "mmrf-orchestrator-agent-runtime"
 }
 
-resource "aws_iam_role_policy" "smoke_agent_invoke_kg_gateway" {
+resource "aws_iam_role_policy" "orchestrator_agent_invoke_kg_gateway" {
   name = "invoke-kg-gateway"
-  role = data.aws_iam_role.smoke_agent_runtime.name
+  role = data.aws_iam_role.orchestrator_agent_runtime.name
 
   policy = jsonencode({
     Version = "2012-10-17"
