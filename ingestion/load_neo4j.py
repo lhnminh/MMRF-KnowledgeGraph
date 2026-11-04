@@ -119,6 +119,20 @@ def mechanism_id(disease_id: str, name: str) -> str:
     return f"dismech:mechanism:{disease_id}:{name}"
 
 
+# A mechanism step's cell_types/biological_processes/locations, each already term-bound (CL/GO/UBERON),
+# so they join the same Entity namespace as every other ontology-backed node.
+MECHANISM_CONTEXT_FIELDS = {
+    "cell_types": "cell_type",
+    "biological_processes": "biological_process",
+    "locations": "location",
+}
+MECHANISM_CONTEXT_CATEGORY = {
+    "cell_type": "biolink:CellularComponent",
+    "biological_process": "biolink:BiologicalProcess",
+    "location": "biolink:GrossAnatomicalStructure",
+}
+
+
 def migrate_mechanism_ids(tx) -> None:
     """Upgrade Mechanism nodes that were keyed by name alone, in place (the loader cannot delete).
 
@@ -151,7 +165,26 @@ def migrate_mechanism_ids(tx) -> None:
 def load_dismech(tx, dismech: dict, version: str) -> None:
     disease_id = dismech["disease_term"]["term"]["id"]
     migrate_mechanism_ids(tx)
-    tx.run("MERGE (d:Disease {id: $id}) SET d.name = $name", id=disease_id, name=dismech["name"])
+    tx.run(
+        """
+        MERGE (d:Disease {id: $id})
+        SET d.name = $name, d.description = $description, d.category = $category,
+            d.categories = $categories, d.parents = $parents
+        """,
+        id=disease_id,
+        name=dismech["name"],
+        description=dismech.get("description"),
+        category=dismech.get("category"),
+        # Delimited strings, because Neptune openCypher has no list-valued properties.
+        categories=";".join(dismech.get("categories") or []),
+        parents=";".join(dismech.get("parents") or []),
+    )
+    icdo = dismech.get("classifications", {}).get("icdo_morphology")
+    if icdo:
+        tx.run(
+            "MATCH (d:Disease {id: $id}) SET d.icdo_morphology_value = $value, d.icdo_morphology_notes = $notes",
+            id=disease_id, value=icdo.get("classification_value"), notes=icdo.get("notes"),
+        )
 
     steps = {step["name"] for step in dismech["pathophysiology"]}
     for step in dismech["pathophysiology"]:
@@ -179,6 +212,29 @@ def load_dismech(tx, dismech: dict, version: str) -> None:
             snippet=evidence.get("snippet"),
             explanation=evidence.get("explanation"),
         )
+        for field, context_type in MECHANISM_CONTEXT_FIELDS.items():
+            for entry in step.get(field, []):
+                term = entry["term"]
+                tx.run(
+                    """
+                    MATCH (m:Mechanism {id: $mechanism})
+                    MERGE (o:Entity {id: $object})
+                    SET o.label = coalesce(o.label, $label),
+                        o.category = coalesce(o.category, $category),
+                        o.source = coalesce(o.source, 'dismech'),
+                        o.source_version = coalesce(o.source_version, $version)
+                    MERGE (m)-[r:HAS_CONTEXT {context_type: $context_type}]->(o)
+                    SET r.source = 'dismech', r.source_version = $version, r.edge_origin = 'recorded',
+                        r.modifier = $modifier
+                    """,
+                    mechanism=mechanism_id(disease_id, step["name"]),
+                    object=term["id"],
+                    label=term.get("label") or entry.get("preferred_term"),
+                    category=MECHANISM_CONTEXT_CATEGORY[context_type],
+                    context_type=context_type,
+                    modifier=entry.get("modifier"),
+                    version=version,
+                )
     # A downstream target that is not a mechanism step is an outcome (usually a phenotype of the same record).
     # It is linked after the phenotypes below exist, and never becomes a Mechanism node.
     outcomes = []
@@ -326,6 +382,123 @@ def load_dismech(tx, dismech: dict, version: str) -> None:
                 agent_label=agent["preferred_term"],
                 version=version,
             )
+
+    for dataset in dismech.get("datasets", []):
+        organism = dataset.get("organism", {}).get("term") or {}
+        tx.run(
+            """
+            MERGE (ds:Entity {id: $dataset})
+            SET ds.label = coalesce(ds.label, $title),
+                ds.category = coalesce(ds.category, 'dismech:Dataset'),
+                ds.source = coalesce(ds.source, 'dismech'),
+                ds.source_version = coalesce(ds.source_version, $version),
+                ds.data_type = $data_type,
+                ds.sample_count = $sample_count,
+                ds.organism_id = $organism_id,
+                ds.organism_label = $organism_label,
+                ds.publication = $publication,
+                ds.notes = $notes
+            MERGE (d:Disease {id: $disease_id})
+            MERGE (d)-[r:HAS_DATASET]->(ds)
+            SET r.source = 'dismech', r.source_version = $version, r.edge_origin = 'recorded',
+                r.description = $description
+            """,
+            dataset=dataset["accession"],
+            title=dataset.get("title"),
+            disease_id=disease_id,
+            data_type=dataset.get("data_type"),
+            sample_count=dataset.get("sample_count"),
+            organism_id=organism.get("id"),
+            organism_label=organism.get("label"),
+            publication=dataset.get("publication"),
+            notes=dataset.get("notes"),
+            description=dataset.get("description"),
+            version=version,
+        )
+
+    for discussion in dismech.get("discussions", []):
+        gap_id = f"dismech:knowledge_gap:{disease_id}:{discussion['discussion_id']}"
+        evidence = (discussion.get("evidence") or [{}])[0]
+        tx.run(
+            """
+            MERGE (g:Entity {id: $gap})
+            SET g.label = coalesce(g.label, $prompt),
+                g.category = coalesce(g.category, 'dismech:KnowledgeGap'),
+                g.source = coalesce(g.source, 'dismech'),
+                g.source_version = coalesce(g.source_version, $version),
+                g.kind = $kind,
+                g.status = $status,
+                g.rationale = $rationale
+            MERGE (d:Disease {id: $disease_id})
+            MERGE (d)-[r:HAS_KNOWLEDGE_GAP]->(g)
+            SET r.source = 'dismech', r.source_version = $version, r.edge_origin = 'recorded',
+                r.evidence_pmid = $pmid, r.evidence_snippet = $snippet, r.dismech_explanation = $explanation
+            """,
+            gap=gap_id,
+            prompt=discussion.get("prompt"),
+            disease_id=disease_id,
+            kind=discussion.get("kind"),
+            status=discussion.get("status"),
+            rationale=discussion.get("rationale"),
+            pmid=evidence.get("reference"),
+            snippet=evidence.get("snippet"),
+            explanation=evidence.get("explanation"),
+            version=version,
+        )
+        for attach in discussion.get("attaches_to", []):
+            step_name = attach.removeprefix("pathophysiology#")
+            if step_name not in steps:
+                continue
+            tx.run(
+                """
+                MATCH (g:Entity {id: $gap})
+                MATCH (m:Mechanism {id: $mechanism})
+                MERGE (m)-[r:HAS_KNOWLEDGE_GAP]->(g)
+                SET r.source = 'dismech', r.source_version = $version, r.edge_origin = 'recorded'
+                """,
+                gap=gap_id, mechanism=mechanism_id(disease_id, step_name), version=version,
+            )
+        for experiment in discussion.get("proposed_experiments", []):
+            experiment_id = f"dismech:experiment:{disease_id}:{experiment['experiment_id']}"
+            tx.run(
+                """
+                MERGE (e:Entity {id: $experiment})
+                SET e.label = coalesce(e.label, $name),
+                    e.category = coalesce(e.category, 'dismech:ProposedExperiment'),
+                    e.source = coalesce(e.source, 'dismech'),
+                    e.source_version = coalesce(e.source_version, $version),
+                    e.description = $description,
+                    e.decision_criterion = $decision_criterion
+                MERGE (g:Entity {id: $gap})
+                MERGE (g)-[r:HAS_PROPOSED_EXPERIMENT]->(e)
+                SET r.source = 'dismech', r.source_version = $version, r.edge_origin = 'recorded'
+                """,
+                experiment=experiment_id,
+                name=experiment.get("name"),
+                description=experiment.get("description"),
+                decision_criterion=experiment.get("decision_criterion"),
+                gap=gap_id,
+                version=version,
+            )
+            for readout in experiment.get("readouts", []):
+                step_name = (readout.get("target") or "").removeprefix("pathophysiology#")
+                if step_name not in steps:
+                    continue
+                tx.run(
+                    """
+                    MATCH (e:Entity {id: $experiment})
+                    MATCH (m:Mechanism {id: $mechanism})
+                    MERGE (e)-[r:INFORMS_MECHANISM {readout_name: $readout_name}]->(m)
+                    SET r.source = 'dismech', r.source_version = $version, r.edge_origin = 'recorded',
+                        r.direction = $direction, r.description = $description
+                    """,
+                    experiment=experiment_id,
+                    mechanism=mechanism_id(disease_id, step_name),
+                    readout_name=readout.get("name"),
+                    direction=readout.get("direction"),
+                    description=readout.get("description"),
+                    version=version,
+                )
 
 
 def parse_drug_targets(text: str) -> tuple[dict, str]:

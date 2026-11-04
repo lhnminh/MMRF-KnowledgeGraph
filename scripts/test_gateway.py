@@ -25,8 +25,8 @@ TOOLS = {
 }
 CONTRACT_VERSION = "0.2"
 # What the current load should produce. Update these and docs/mcp-tools.md when the loaded data changes.
-NODES = 164
-RELATIONSHIPS = 289
+NODES = 200
+RELATIONSHIPS = 346
 PHENOTYPE_EDGES = 43
 MECHANISMS = 8
 CAUSAL_EDGES = 7

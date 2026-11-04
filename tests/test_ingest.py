@@ -39,10 +39,18 @@ MONARCH = {
 }
 DISMECH_YAML = """
 name: Multiple Myeloma
+category: Complex
+categories: [Hematologic Malignancy, Plasma Cell Neoplasm]
+parents: [plasma cell neoplasm]
+description: a malignancy of plasma cells
 disease_term: {term: {id: "MONDO:0009693"}}
 pathophysiology:
   - name: A
     description: first step
+    cell_types: [{preferred_term: plasma cell, term: {id: "CL:0000786", label: plasma cell}}]
+    biological_processes:
+      - {preferred_term: cell proliferation, modifier: INCREASED, term: {id: "GO:0008283", label: cell population proliferation}}
+    locations: [{preferred_term: bone marrow, term: {id: "UBERON:0002371", label: bone marrow}}]
     downstream:
       - target: B
         evidence: [{reference: "PMID:3", snippet: quoted, explanation: commentary}]
@@ -71,6 +79,37 @@ treatments:
   - name: Autologous Stem Cell Transplantation
     therapeutic_modality: SURGERY
     treatment_term: {term: {id: "NCIT:C15289", label: Organ Transplantation}}
+datasets:
+  - accession: "geo:GSE1"
+    title: Example dataset
+    description: an RNA-seq study
+    organism: {term: {id: "NCBITaxon:9606", label: "Homo sapiens"}}
+    data_type: BULK_RNA_SEQ
+    sample_count: 10
+    publication: "PMID:6"
+    notes: found via index search
+classifications:
+  icdo_morphology:
+    classification_value: Multiple Myeloma
+    notes: bound to NCIT:C3242
+discussions:
+  - discussion_id: gap_example
+    prompt: an open question
+    kind: KNOWLEDGE_GAP
+    status: OPEN
+    rationale: because evidence is incomplete
+    attaches_to: ["pathophysiology#A"]
+    evidence: [{reference: "PMID:7", snippet: quoted gap, explanation: gap commentary}]
+    proposed_experiments:
+      - experiment_id: exp_example
+        name: an experiment
+        description: do a thing
+        decision_criterion: see a result
+        readouts:
+          - name: a readout
+            target: "pathophysiology#A"
+            description: measure something
+            direction: POSITIVE
 """
 PROVENANCE = json.dumps({"source_revision": "b1ca0b2"})
 
@@ -133,8 +172,7 @@ def test_every_edge_records_its_source_version_and_origin():
     loader.load_monarch(tx, MONARCH, "2026-10-07")
     loader.load_dismech(tx, loader.yaml.safe_load(DISMECH_YAML), "b1ca0b2")
     edge_writes = [(q, p) for q, p in tx.calls if "]->(" in q and "version" in p]  # not the id migration
-    # Two associations, two mechanisms, one causal edge, one phenotype, two genetic, two treatments, one agent.
-    assert len(edge_writes) == 11
+    assert len(edge_writes) == 19
     for query, parameters in edge_writes:
         assert "source_version = $version" in query and "edge_origin = 'recorded'" in query
         assert parameters["version"] in {"2026-10-07", "b1ca0b2"}
@@ -178,6 +216,48 @@ def test_each_treatment_is_its_own_node_linked_to_its_agents():
     assert [(p["treatment"], p["agent"]) for p in agents] == [
         ("dismech:treatment:Proteasome Inhibitor Therapy", "CHEBI:52717")
     ]
+
+
+def test_disease_node_carries_category_and_icdo_classification():
+    tx = FakeTx()
+    loader.load_dismech(tx, loader.yaml.safe_load(DISMECH_YAML), "b1ca0b2")
+    disease_set = next(p for q, p in tx.calls if q.strip().startswith("MERGE (d:Disease {id: $id})"))
+    assert disease_set["category"] == "Complex"
+    assert disease_set["categories"] == "Hematologic Malignancy;Plasma Cell Neoplasm"
+    assert disease_set["description"] == "a malignancy of plasma cells"
+    icdo = next(p for q, p in tx.calls if "icdo_morphology_value" in q)
+    assert icdo["value"] == "Multiple Myeloma" and icdo["notes"] == "bound to NCIT:C3242"
+
+
+def test_mechanism_context_loads_as_entities_with_their_ontology_category():
+    tx = FakeTx()
+    loader.load_dismech(tx, loader.yaml.safe_load(DISMECH_YAML), "b1ca0b2")
+    context = {p["context_type"]: p for q, p in tx.calls if "HAS_CONTEXT" in q}
+    assert context["cell_type"]["object"] == "CL:0000786" and context["cell_type"]["category"] == "biolink:CellularComponent"
+    assert context["biological_process"]["modifier"] == "INCREASED"
+    assert context["location"]["object"] == "UBERON:0002371"
+
+
+def test_dataset_links_to_the_disease_with_its_metadata():
+    tx = FakeTx()
+    loader.load_dismech(tx, loader.yaml.safe_load(DISMECH_YAML), "b1ca0b2")
+    _, parameters = next((q, p) for q, p in tx.calls if "HAS_DATASET" in q)
+    assert parameters["dataset"] == "geo:GSE1" and parameters["sample_count"] == 10
+    assert parameters["organism_id"] == "NCBITaxon:9606" and parameters["publication"] == "PMID:6"
+
+
+def test_knowledge_gap_links_to_disease_mechanism_and_its_proposed_experiment():
+    tx = FakeTx()
+    loader.load_dismech(tx, loader.yaml.safe_load(DISMECH_YAML), "b1ca0b2")
+    gap_id = "dismech:knowledge_gap:MONDO:0009693:gap_example"
+    _, gap = next((q, p) for q, p in tx.calls if p.get("gap") == gap_id and "prompt" in p)
+    assert gap["status"] == "OPEN" and gap["pmid"] == "PMID:7" and gap["snippet"] == "quoted gap"
+    attach = next(p for q, p in tx.calls if p.get("gap") == gap_id and "mechanism" in p and "readout_name" not in p)
+    assert attach["mechanism"] == "dismech:mechanism:MONDO:0009693:A"
+    _, experiment = next((q, p) for q, p in tx.calls if p.get("gap") == gap_id and "decision_criterion" in p)
+    assert experiment["experiment"] == "dismech:experiment:MONDO:0009693:exp_example"
+    readout = next(p for q, p in tx.calls if "readout_name" in p)
+    assert readout["mechanism"] == "dismech:mechanism:MONDO:0009693:A" and readout["direction"] == "POSITIVE"
 
 
 def test_parameters_are_neptune_safe():
