@@ -21,6 +21,7 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "raw"
 NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_AUTH = ("neo4j", "password")
 
+DRUG_TARGETS_FILE = "drug_targets.json"
 MONARCH_FILE = "monarch_mm.json"
 DISMECH_FILE = "dismech_mm.yaml"
 DISMECH_PROVENANCE_FILE = "dismech_mm.yaml.provenance.json"
@@ -112,16 +113,53 @@ def load_gene_disease_association(tx, assoc: dict, version: str) -> None:
     )
 
 
+def mechanism_id(disease_id: str, name: str) -> str:
+    """Mechanism names repeat across diseases ("Immune Dysregulation"), so the disease id is part of the id."""
+    return f"dismech:mechanism:{disease_id}:{name}"
+
+
+def migrate_mechanism_ids(tx) -> None:
+    """Upgrade Mechanism nodes that were keyed by name alone, in place (the loader cannot delete).
+
+    A legacy node has no `id`. If exactly one disease points at it, it gets that disease's id and the id the
+    loader would now give it, so the next MERGE finds it. A node no disease points at is a stub that an older
+    loader made for a `downstream` target that is not a mechanism step (a phenotype, for example); it is marked
+    `retired` and carries no id, so no tool returns it. A legacy node shared by several diseases is left alone
+    for a person to resolve. Safe to rerun: it only touches nodes that still have no id."""
+    tx.run(
+        """
+        MATCH (d:Disease)-[:HAS_MECHANISM]->(m:Mechanism)
+        WHERE m.id IS NULL
+        WITH m, collect(d.id) AS diseases
+        WHERE size(diseases) = 1
+        SET m.id = 'dismech:mechanism:' + head(diseases) + ':' + m.name, m.disease_id = head(diseases)
+        """
+    )
+    tx.run(
+        """
+        MATCH (m:Mechanism)
+        WHERE m.id IS NULL AND m.retired IS NULL
+        OPTIONAL MATCH (:Disease)-[h:HAS_MECHANISM]->(m)
+        WITH m, count(h) AS parents
+        WHERE parents = 0
+        SET m.retired = true
+        """
+    )
+
+
 def load_dismech(tx, dismech: dict, version: str) -> None:
     disease_id = dismech["disease_term"]["term"]["id"]
+    migrate_mechanism_ids(tx)
     tx.run("MERGE (d:Disease {id: $id}) SET d.name = $name", id=disease_id, name=dismech["name"])
 
+    steps = {step["name"] for step in dismech["pathophysiology"]}
     for step in dismech["pathophysiology"]:
         evidence = (step.get("evidence") or [{}])[0]
         tx.run(
             """
-            MERGE (m:Mechanism {name: $name})
-            SET m.description = $description, m.source = 'dismech', m.source_version = $version
+            MERGE (m:Mechanism {id: $mechanism})
+            SET m.name = $name, m.disease_id = $disease_id, m.description = $description,
+                m.source = 'dismech', m.source_version = $version
             MERGE (d:Disease {id: $disease_id})
             MERGE (d)-[h:HAS_MECHANISM]->(m)
             SET h.source = 'dismech',
@@ -131,6 +169,7 @@ def load_dismech(tx, dismech: dict, version: str) -> None:
                 h.evidence_snippet = $snippet,
                 h.dismech_explanation = $explanation
             """,
+            mechanism=mechanism_id(disease_id, step["name"]),
             name=step["name"],
             description=step.get("description"),
             disease_id=disease_id,
@@ -139,27 +178,37 @@ def load_dismech(tx, dismech: dict, version: str) -> None:
             snippet=evidence.get("snippet"),
             explanation=evidence.get("explanation"),
         )
+    # A downstream target that is not a mechanism step is an outcome (usually a phenotype of the same record).
+    # It is linked after the phenotypes below exist, and never becomes a Mechanism node.
+    outcomes = []
+    for step in dismech["pathophysiology"]:
         for downstream in step.get("downstream", []):
             evidence = (downstream.get("evidence") or [{}])[0]
-            tx.run(
-                """
-                MERGE (a:Mechanism {name: $from_name})
-                MERGE (b:Mechanism {name: $to_name})
-                MERGE (a)-[r:LEADS_TO]->(b)
-                SET r.source = 'dismech',
-                    r.source_version = $version,
-                    r.edge_origin = 'recorded',
-                    r.evidence_pmid = $pmid,
-                    r.evidence_snippet = $snippet,
-                    r.dismech_explanation = $explanation
-                """,
-                from_name=step["name"],
-                to_name=downstream["target"],
+            edge = dict(
                 pmid=evidence.get("reference"),
                 snippet=evidence.get("snippet"),
                 explanation=evidence.get("explanation"),
                 version=version,
             )
+            if downstream["target"] in steps:
+                tx.run(
+                    """
+                    MATCH (a:Mechanism {id: $from_id})
+                    MATCH (b:Mechanism {id: $to_id})
+                    MERGE (a)-[r:LEADS_TO]->(b)
+                    SET r.source = 'dismech',
+                        r.source_version = $version,
+                        r.edge_origin = 'recorded',
+                        r.evidence_pmid = $pmid,
+                        r.evidence_snippet = $snippet,
+                        r.dismech_explanation = $explanation
+                    """,
+                    from_id=mechanism_id(disease_id, step["name"]),
+                    to_id=mechanism_id(disease_id, downstream["target"]),
+                    **edge,
+                )
+            else:
+                outcomes.append((mechanism_id(disease_id, step["name"]), downstream["target"], edge))
 
     for phenotype in dismech.get("phenotypes", []):
         term = phenotype["phenotype_term"]["term"]
@@ -167,6 +216,29 @@ def load_dismech(tx, dismech: dict, version: str) -> None:
         write_association(
             tx, disease_id, term["id"], term["label"], "biolink:PhenotypicFeature", "biolink:has_phenotype",
             phenotype, version, description=phenotype.get("description"), frequency=phenotype.get("frequency"),
+        )
+
+    phenotype_ids = {p["name"]: p["phenotype_term"]["term"]["id"] for p in dismech.get("phenotypes", [])}
+    for mechanism, target, edge in outcomes:
+        # The record's own phenotype when one has this name; otherwise a record-scoped outcome node.
+        outcome = phenotype_ids.get(target) or f"dismech:outcome:{disease_id}:{target}"
+        tx.run(
+            """
+            MATCH (m:Mechanism {id: $mechanism})
+            MERGE (o:Entity {id: $outcome})
+            SET o.label = coalesce(o.label, $label),
+                o.category = coalesce(o.category, 'dismech:DownstreamOutcome'),
+                o.source = coalesce(o.source, 'dismech'),
+                o.source_version = coalesce(o.source_version, $version)
+            MERGE (m)-[r:LEADS_TO_PHENOTYPE]->(o)
+            SET r.source = 'dismech',
+                r.source_version = $version,
+                r.edge_origin = 'recorded',
+                r.evidence_pmid = $pmid,
+                r.evidence_snippet = $snippet,
+                r.dismech_explanation = $explanation
+            """,
+            mechanism=mechanism, outcome=outcome, label=target, **edge,
         )
 
     for subtype in dismech.get("has_subtypes", []):
@@ -216,7 +288,7 @@ def load_dismech(tx, dismech: dict, version: str) -> None:
             tx.run(
                 """
                 MATCH (t:Entity {id: $treatment})
-                MERGE (m:Mechanism {name: $mechanism})
+                MATCH (m:Mechanism {id: $mechanism})
                 MERGE (t)-[r:TARGETS_MECHANISM]->(m)
                 SET r.source = 'dismech',
                     r.source_version = $version,
@@ -228,7 +300,7 @@ def load_dismech(tx, dismech: dict, version: str) -> None:
                     r.dismech_explanation = $explanation
                 """,
                 treatment=treatment_id,
-                mechanism=target["target"],
+                mechanism=mechanism_id(disease_id, target["target"]),
                 effect=target.get("treatment_effect"),
                 description=target.get("description"),
                 pmid=evidence.get("reference"),
@@ -251,6 +323,68 @@ def load_dismech(tx, dismech: dict, version: str) -> None:
                 treatment=treatment_id,
                 agent=agent["term"]["id"],
                 agent_label=agent["preferred_term"],
+                version=version,
+            )
+
+
+def parse_drug_targets(text: str) -> tuple[dict, str]:
+    """Return (drug_targets, version), refusing unversioned data (AD-001)."""
+    data = json.loads(text)
+    version = data.get("source_version")
+    if not version:
+        raise ValueError(f"{DRUG_TARGETS_FILE} has no source_version; re-run ingestion/fetch_drug_targets.py")
+    return data, version
+
+
+def load_drug_targets(tx, data: dict, version: str) -> None:
+    """Drug -> gene edges from Open Targets, one per (drug, gene) with its mechanisms joined into strings.
+
+    Only an agent already in the graph (from a DisMech treatment) gets edges, and only a target with an
+    HGNC id is loaded, so every edge joins on the ids the other sources use."""
+    for agent in data["agents"]:
+        if agent["status"] != "matched":
+            continue
+        by_gene: dict[str, dict] = {}
+        for mechanism in agent["mechanisms"]:
+            for target in mechanism["targets"]:
+                if not target.get("hgnc_id"):
+                    continue
+                gene = by_gene.setdefault(
+                    target["hgnc_id"], {"symbol": target["symbol"], "actions": [], "mechanisms": [], "references": []}
+                )
+                for key, value in (
+                    ("actions", mechanism["action_type"]),
+                    ("mechanisms", mechanism["mechanism_of_action"]),
+                    *(("references", reference) for reference in mechanism["references"]),
+                ):
+                    if value and value not in gene[key]:
+                        gene[key].append(value)
+        for gene_id, gene in by_gene.items():
+            tx.run(
+                """
+                MATCH (a:Entity {id: $agent})
+                MERGE (g:Entity {id: $gene})
+                SET g.label = coalesce(g.label, $symbol),
+                    g.category = coalesce(g.category, 'biolink:Gene'),
+                    g.source = coalesce(g.source, 'opentargets'),
+                    g.source_version = coalesce(g.source_version, $version)
+                MERGE (a)-[r:TARGETS_GENE]->(g)
+                SET r.source = 'opentargets',
+                    r.source_version = $version,
+                    r.edge_origin = 'recorded',
+                    r.chembl_id = $chembl_id,
+                    r.action_type = $action_type,
+                    r.mechanism_of_action = $mechanism_of_action,
+                    r.references = $references
+                """,
+                agent=agent["agent_id"],
+                gene=gene_id,
+                symbol=gene["symbol"],
+                chembl_id=agent["chembl_id"],
+                # Delimited strings, because Neptune openCypher has no list-valued properties.
+                action_type=";".join(gene["actions"]),
+                mechanism_of_action=" | ".join(gene["mechanisms"]),
+                references=";".join(gene["references"]),
                 version=version,
             )
 
@@ -326,11 +460,13 @@ def load_graph(driver, monarch_text: str, dismech_text: str, provenance_text: st
     return load_graphs(driver, [(monarch_text, dismech_text, provenance_text)])
 
 
-def load_graphs(driver, sources: list[tuple[str, str, str]]) -> dict:
+def load_graphs(driver, sources: list[tuple[str, str, str]], drug_targets_text: "str | None" = None) -> dict:
     """Load each (monarch_text, dismech_text, provenance_text) set, then report what the graph holds.
 
-    Every set is parsed, and refused if unversioned, before anything is written."""
+    Drug targets, if given, load last because they attach to agents that the DisMech records create.
+    Every input is parsed, and refused if unversioned, before anything is written."""
     parsed = [parse_sources(*texts) for texts in sources]
+    drug_targets = parse_drug_targets(drug_targets_text) if drug_targets_text else None
     monarch_versions, dismech_versions = set(), set()
     with driver.session() as session:
         for monarch, dismech, monarch_version, dismech_version in parsed:
@@ -338,6 +474,8 @@ def load_graphs(driver, sources: list[tuple[str, str, str]]) -> dict:
             monarch_versions.add(monarch_version)
             _execute_write_with_retry(session, load_dismech, dismech, dismech_version)
             dismech_versions.add(dismech_version)
+        if drug_targets:
+            _execute_write_with_retry(session, load_drug_targets, *drug_targets)
         nodes = session.execute_read(lambda tx: tx.run("MATCH (n) RETURN count(n) AS c").single()["c"])
         edges = session.execute_read(lambda tx: tx.run("MATCH ()-[r]->() RETURN count(r) AS c").single()["c"])
     return {
@@ -345,6 +483,7 @@ def load_graphs(driver, sources: list[tuple[str, str, str]]) -> dict:
         "relationships": edges,
         "monarch_version": ", ".join(sorted(monarch_versions)),
         "dismech_version": ", ".join(sorted(dismech_versions)),
+        "opentargets_version": drug_targets[1] if drug_targets else None,
     }
 
 
@@ -381,6 +520,8 @@ def lambda_handler(event, context) -> dict:
             (read(f"monarch_{n}.json"), read(f"dismech_{n}.yaml"), read(f"dismech_{n}.yaml.provenance.json"))
             for n in source_names(event)
         ],
+        # {"drug_targets": true} also loads raw/drug_targets.json (Open Targets), after the records above.
+        read(DRUG_TARGETS_FILE) if (event or {}).get("drug_targets") is True else None,
     )
     print(json.dumps({"event": "kg_ingest", **result}))
     return result
@@ -392,11 +533,14 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sources", nargs="+", default=["mm"], help="names such as mm jmml")
-    names = source_names({"sources": parser.parse_args().sources})
+    parser.add_argument("--drug-targets", action="store_true", help=f"also load {DRUG_TARGETS_FILE}")
+    args = parser.parse_args()
+    names = source_names({"sources": args.sources})
     driver = GraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
     result = load_graphs(
         driver,
         [(read(f"monarch_{n}.json"), read(f"dismech_{n}.yaml"), read(f"dismech_{n}.yaml.provenance.json")) for n in names],
+        read(DRUG_TARGETS_FILE) if args.drug_targets else None,
     )
     driver.close()
     print(f"Loaded Monarch associations and DisMech records into Neo4j: {result}")

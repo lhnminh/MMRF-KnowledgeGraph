@@ -29,9 +29,9 @@ Over MCP, every name has the target prefix: `kg-graph___kg_search_entities`, and
 | `kg_get_phenotypes` | List the phenotypes recorded for a disease (Monarch and DisMech). A phenotype in both has one edge per source. | `disease_id` (required), such as `MONDO:0009693`. `limit`: 1-200, default 50. |
 | `kg_get_mechanism_paths` | Get DisMech mechanisms and the causal edges between them, with evidence. | `disease_id` (required). |
 | `kg_get_evidence` | Look up the evidence for one edge, or every edge citing a reference. | Exactly one of `edge_id` (from `graph.edges[].id`) or `reference` (such as `PMID:34201396` or `infores:orphanet`). |
-| `kg_get_gene_context` | See everything recorded about one human gene, per source: Monarch gene-disease associations, DisMech genetic factors and the subtypes the gene defines. Says "none recorded" for each loaded source with nothing. | `gene` (required): an HGNC id such as `HGNC:6407` or an approved symbol such as `KRAS`. `limit`: 1-200, default 50. |
+| `kg_get_gene_context` | See everything recorded about one human gene, per source: Monarch gene-disease associations, DisMech genetic factors, the subtypes the gene defines, and the drugs that act on it (Open Targets). Says "none recorded" for Monarch or DisMech when a source has nothing. | `gene` (required): an HGNC id such as `HGNC:6407` or an approved symbol such as `KRAS`. `limit`: 1-200, default 50. |
 | `kg_get_gene_disease_association` | Get the link between one gene and one disease from each source: the Monarch association (relationship, knowledge source, disease id), the DisMech genetic factor and the subtype the gene defines. With a `variant`, says whether anything exists at that specificity. | `gene` and `disease_id` (both required). `variant`: optional, such as `KRAS G12D`. |
-| `kg_get_treatment_evidence` | Get a disease's recorded treatments with their agents, the mechanism each acts on (with that link's evidence and the mechanism's place in the disease record), and the cited evidence text. Lists treatments with no mechanism link and agents with no recorded target. | `disease_id` (required). `treatment`, `mechanism`: optional name filters, such as `trametinib` or `RAS/MAPK`. |
+| `kg_get_treatment_evidence` | Get a disease's recorded treatments with their agents, the mechanism each acts on (with that link's evidence and the mechanism's place in the disease record), and the cited evidence text. Also returns each agent's molecular targets from Open Targets (up to 10 per agent) and lists treatments with no mechanism link and agents with no recorded target. | `disease_id` (required). `treatment`, `mechanism`: optional name filters, such as `trametinib` or `RAS/MAPK`. |
 | `kg_run_readonly_query` | Ask something no named tool covers. Use this last. | `query` (required): one openCypher read. `parameters`: values for `$name` placeholders. |
 
 ### Limits on `kg_run_readonly_query`
@@ -54,8 +54,8 @@ Each result's `content[0].text` is a JSON string holding this envelope:
   "observations": [{ "text": "DisMech records that A leads to B.", "refs": ["<evidence id>"] }],
   "interpretation": [{ "text": "<curator commentary>", "basis": "source_curator_commentary", "refs": ["<evidence id>"] }],
   "graph": {
-    "nodes": [{ "id": "dismech:mechanism:A", "label": "A", "type": "Mechanism", "source_dataset": "dismech", "source_version": "<commit>" }],
-    "edges": [{ "id": "dismech:A|leads_to|B", "source": "dismech:mechanism:A", "target": "dismech:mechanism:B", "predicate": "leads_to",
+    "nodes": [{ "id": "dismech:mechanism:MONDO:0009693:A", "label": "A", "type": "Mechanism", "source_dataset": "dismech", "source_version": "<commit>" }],
+    "edges": [{ "id": "dismech:dismech:mechanism:MONDO:0009693:A|leads_to|dismech:mechanism:MONDO:0009693:B", "source": "dismech:mechanism:MONDO:0009693:A", "target": "dismech:mechanism:MONDO:0009693:B", "predicate": "leads_to",
                 "edge_origin": "recorded", "source_dataset": "dismech", "source_version": "<commit>", "evidence_ids": ["<evidence id>"] }]
   },
   "evidence": [{ "id": "<evidence id>", "reference": "PMID:34201396", "snippet": "<quoted text>", "source_dataset": "dismech", "source_version": "<commit>" }],
@@ -80,41 +80,44 @@ Every tool declares an `outputSchema` matching this shape, so a client that nego
 
 ## What the graph contains
 
-111 nodes and 138 relationships for multiple myeloma (MM) and juvenile myelomonocytic leukemia (JMML, `MONDO:0011908`):
+164 nodes and 289 relationships for multiple myeloma (MM) and juvenile myelomonocytic leukemia (JMML, `MONDO:0011908`):
 
 | Source | Version | Provides |
 | --- | --- | --- |
 | Monarch KG | `2026-10-07` | MM: 43 associations (phenotypes, related diseases and others). JMML: 5, including the gene-level KRAS association (`HGNC:6407`, Orphanet) |
 | DisMech | `v0.1.46` (commit `b1ca0b232b815a21b4ba95a62828c9979e9a49e7`) | MM: 8 mechanisms, 7 causal edges, 9 phenotypes, 3 genetic factors, and 6 treatments with 11 named drugs. JMML: 5 mechanisms, 5 subtypes with their driver genes, 7 genetic factors, 3 treatments each linked to a mechanism |
+| Open Targets | `26.09` | 144 drug-to-gene edges (`TARGETS_GENE`) for the 13 drug agents named in the DisMech treatments, with the FDA label or document that supports each. Not its gene-disease associations or other data |
 
 ```text
 (:Disease {id, name})-[:ASSOCIATION {predicate, source, source_version, edge_origin, primary_knowledge_source, publications, record_name, frequency, association_type, ontology_term, therapeutic_modality, description, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Entity or :Disease {id, label, category})
 (:Entity {category: 'biolink:Treatment'})-[:HAS_AGENT {source, source_version, edge_origin}]->(:Entity {category: 'biolink:Drug'})
 (:Entity {category: 'biolink:Gene'})-[:ASSOCIATION {predicate, source: 'monarch', ...}]->(:Disease)   // Monarch gene-disease: the gene is the subject
+(:Entity {drug})-[:TARGETS_GENE {source: 'opentargets', source_version, edge_origin, chembl_id, action_type, mechanism_of_action, references}]->(:Entity {gene})   // references and action_type are ;-separated strings
 (:Entity {subtype})-[:HAS_DRIVER_GENE {source, source_version, edge_origin, association_type}]->(:Entity {gene})
 (:Entity {treatment})-[:TARGETS_MECHANISM {source, source_version, edge_origin, treatment_effect, description, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Mechanism)
-(:Disease)-[:HAS_MECHANISM {source, source_version, edge_origin, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Mechanism {name, description, source, source_version})
+(:Disease)-[:HAS_MECHANISM {source, source_version, edge_origin, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Mechanism {id, name, disease_id, description, source, source_version})   // id = dismech:mechanism:<disease id>:<name>
 (:Mechanism)-[:LEADS_TO {source, source_version, edge_origin, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Mechanism)
+(:Mechanism)-[:LEADS_TO_PHENOTYPE {source, source_version, edge_origin, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Entity {phenotype or outcome})   // a downstream step that is not itself a mechanism
 ```
 
 On `ASSOCIATION`, Monarch edges use `primary_knowledge_source` and `publications`, and DisMech edges use the other citation properties. Filter on `source` to separate them. `publications` is a `;`-separated string. `dismech_explanation` and DisMech's `description` on a `Mechanism` or `ASSOCIATION` are curator commentary, so report them as interpretation.
 
 **Not available yet:**
 
-- Open Targets and CIViC data, so there are no target or variant answers. Genes and drugs are limited to what Monarch and DisMech record for the two loaded diseases.
+- CIViC data, and Open Targets beyond drug targets (its gene-disease associations and tractability), so there are no variant or target-prioritization answers. Genes are limited to what Monarch, DisMech and the drug targets name.
 - Variant-level records. Associations are at gene level, so `kg_get_gene_disease_association` reports a requested variant as a change in specificity.
-- A molecular target for a drug. DisMech names targets such as MEK1/2 only in descriptions, which are text rather than edges, so the tools report "no molecular target recorded".
+- A drug target in the DisMech record itself. DisMech names targets such as MEK1/2 only in descriptions. The target edges come from Open Targets, so the tools present them as a separate source from the trial evidence. Proteasome inhibitors list every proteasome subunit (38 genes), so responses cap targets at 10 per agent.
 - Trial results as structured data. Population and response appear only in the quoted evidence snippet.
 - Only the loaded diseases are covered. Anything else is "none recorded" until it is loaded (`ingestion/fetch_*.py`, then the `sources` argument of `kg-ingest`).
-- JMML mechanism nodes that are really phenotypes. Seven `Mechanism` nodes (such as Anemia and Splenomegaly) exist only because a JMML mechanism lists them as a downstream step, and they have no source or description.
+- Seven retired `Mechanism` nodes (Anemia, Splenomegaly and others) that an earlier load made for JMML downstream steps that are really phenotypes. They have no `id` and are marked `retired`; no tool returns them. They count toward the node total because the loader cannot delete. Their real relationships are the `LEADS_TO_PHENOTYPE` edges.
 - DisMech's cell types, biological processes and locations for each mechanism.
-- Links between phenotypes and mechanisms. Anemia, for example, is a phenotype with no edge from Bone Marrow Failure. `kg_get_mechanism_paths` lists every step its mechanism descriptions state without an edge in `limitations`, beginning `Not a recorded edge:`.
+- Links between phenotypes and mechanisms for multiple myeloma. Anemia, for example, is a phenotype with no edge from Bone Marrow Failure. (DisMech's JMML record does record them, as `LEADS_TO_PHENOTYPE` edges.) `kg_get_mechanism_paths` lists every step its mechanism descriptions state without an edge in `limitations`, beginning `Not a recorded edge:`.
 
 ## Example: from a gene to a drug in JMML
 
 1. `kg_get_gene_disease_association` with `{"gene": "KRAS", "disease_id": "MONDO:0011908", "variant": "KRAS G12D"}` returns the Monarch association between `HGNC:6407` and JMML (relationship `gene_associated_with_condition`, source `infores:orphanet`) and DisMech's KRAS-mutated subtype. `limitations` says the record is at gene level, not specific to the variant.
 2. `kg_get_mechanism_paths` with `{"disease_id": "MONDO:0011908"}` returns the DisMech JMML mechanisms, including RAS/MAPK Pathway Hyperactivation.
-3. `kg_get_treatment_evidence` with `{"disease_id": "MONDO:0011908", "treatment": "trametinib"}` returns trametinib, the mechanism it inhibits, and the phase II trial text (PMID:38867349) in `evidence`. `limitations` says no molecular target is recorded and the trial result is text only.
+3. `kg_get_treatment_evidence` with `{"disease_id": "MONDO:0011908", "treatment": "trametinib"}` returns trametinib, the mechanism it inhibits, the phase II trial text (PMID:38867349) in `evidence`, and its targets MAP2K1 and MAP2K2 from Open Targets with their FDA label references. `limitations` says the targets are not part of the DisMech record and the trial result is text only.
 
 ## Example: what leads to hypercalcemia?
 
