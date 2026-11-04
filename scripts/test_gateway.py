@@ -20,7 +20,8 @@ TIMEOUT_SECONDS = 70  # just above the kg-graph Lambda's 60 second limit
 DISEASE_ID = "MONDO:0009693"
 TOOLS = {
     "kg_search_entities", "kg_get_phenotypes", "kg_get_mechanism_paths", "kg_get_evidence",
-    "kg_get_gene_context", "kg_get_gene_disease_association", "kg_get_treatment_evidence", "kg_run_readonly_query",
+    "kg_get_gene_context", "kg_get_gene_disease_association", "kg_get_treatment_evidence", "kg_get_drug_context",
+    "kg_run_readonly_query",
 }
 CONTRACT_VERSION = "0.2"
 # What the current load should produce. Update these and docs/mcp-tools.md when the loaded data changes.
@@ -173,6 +174,15 @@ def check_jmml_path(client) -> str:
     return f"{KRAS_ID} -> {JMML_ID}, trametinib -> mechanism with {TRAMETINIB_PMID}"
 
 
+def check_drug_context(client) -> str:
+    envelope = client.call_tool("kg_get_drug_context", drug="trametinib")
+    _usable(envelope, "graph")
+    targets = [e for e in envelope["graph"]["edges"] if e["predicate"] == "targets_gene"]
+    if not targets:
+        raise CallFailed(f"no drug targets returned for trametinib: {envelope['summary']}")
+    return f"trametinib has {len(targets)} recorded gene target(s)"
+
+
 def check_writes_are_rejected(client) -> str:
     envelope = client.call_tool("kg_run_readonly_query", query=WRITE_ATTEMPT)
     if envelope.get("result_type") != "text" or "rejected" not in (envelope.get("summary") or ""):
@@ -187,6 +197,7 @@ CHECKS = [
     ("phenotypes are returned", check_phenotypes),
     ("mechanisms and evidence are returned", check_mechanisms_and_evidence),
     ("JMML gene, mechanism and treatment links are returned", check_jmml_path),
+    ("drug targets are returned", check_drug_context),
     ("write queries are rejected", check_writes_are_rejected),
 ]
 

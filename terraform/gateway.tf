@@ -54,7 +54,7 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
         tool_schema {
           inline_payload {
             name        = "kg_search_entities"
-            description = "Find diseases, phenotypes and mechanisms in the knowledge graph by name or exact id. Use first to resolve a plain-language term to a graph id."
+            description = "Find diseases, phenotypes, genes, drugs and mechanisms in the knowledge graph by name or exact id (for example a drug name like trametinib, a gene symbol, or a MONDO/HP/HGNC/CHEBI id). Use first to resolve a plain-language term to a graph id."
 
             input_schema {
               type = "object"
@@ -679,7 +679,7 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
 
           inline_payload {
             name        = "kg_get_gene_context"
-            description = "Everything the graph records about one human gene, per source: Monarch gene-disease associations, DisMech genetic factors, the disease subtypes the gene defines, and the drugs that act on it (Open Targets mechanism of action). States none recorded for Monarch and DisMech when a source has nothing, and that CIViC is not loaded."
+            description = "Everything the graph records about one human gene, per source: Monarch gene-disease associations, DisMech genetic factors, the disease subtypes the gene defines, and the drugs that target it (Open Targets mechanism of action, for example MAP2K1 is targeted by trametinib). States none recorded for Monarch and DisMech when a source has nothing, and that CIViC is not loaded."
 
             input_schema {
               type = "object"
@@ -1002,7 +1002,7 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
 
           inline_payload {
             name        = "kg_get_treatment_evidence"
-            description = "DisMech recorded treatments for a disease with their agents, the mechanism each treatment acts on (with that edge's own evidence, and the mechanism's place in the disease record) and the cited evidence text. Also returns each agent's molecular targets from Open Targets (a separate source from DisMech, capped at 10 per agent), and reports treatments with no mechanism link and agents with no recorded target. Recorded knowledge, not a recommendation."
+            description = "A disease's recorded drug treatments and their evidence: each treatment's drug agents, each drug's molecular gene targets from Open Targets (for example trametinib -> MEK1/2 genes MAP2K1/MAP2K2, capped at 10 per drug), the DisMech mechanism each treatment acts on with its trial evidence, and the mechanism's place in the disease record. Answers 'what drugs are recorded for this disease and what do they target'. Recorded knowledge, not a recommendation."
 
             input_schema {
               type = "object"
@@ -1024,6 +1024,164 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
                 name        = "mechanism"
                 type        = "string"
                 description = "Optional: only treatments acting on a mechanism whose name contains this text, e.g. RAS/MAPK"
+              }
+            }
+
+            output_schema {
+              type        = "object"
+              description = "AD-004 envelope (contract_version 0.2): observations are recorded facts, interpretation is added explanation, limitations state what the answer can't support."
+
+              property {
+                name     = "contract_version"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "result_type"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "summary"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name        = "observations"
+                type        = "array"
+                description = "What a source record states, each with a refs array of evidence ids."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "interpretation"
+                type        = "array"
+                description = "Curator explanation, not an established fact. Each item carries basis and refs."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name     = "graph"
+                type     = "object"
+                required = true
+
+                property {
+                  name       = "nodes"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "edges"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name        = "paths"
+                  type        = "array"
+                  description = "Ordered chains of graph.edges: node_ids[i] and node_ids[i + 1] are joined by edge_ids[i]."
+                  items_json  = jsonencode({ type = "object" })
+                }
+              }
+
+              property {
+                name        = "evidence"
+                type        = "array"
+                description = "Flat lookup table of citations; observations/interpretation refs point into this by id."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "query"
+                type        = "object"
+                description = "The openCypher query that ran, present when one did."
+
+                property {
+                  name = "language"
+                  type = "string"
+                }
+
+                property {
+                  name = "text"
+                  type = "string"
+                }
+
+                property {
+                  name = "parameters"
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "limitations"
+                type        = "array"
+                description = "What the answer can't support. Always pass these on."
+                required    = true
+
+                items {
+                  type = "string"
+                }
+              }
+
+              property {
+                name     = "trace"
+                type     = "object"
+                required = true
+
+                property {
+                  name = "request_id"
+                  type = "string"
+                }
+
+                property {
+                  name       = "plan"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "tool_calls"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+            }
+          }
+
+          inline_payload {
+            name        = "kg_get_drug_context"
+            description = "Everything the graph records about one drug, by drug name or CHEBI/CHEMBL/NCIT id (for example trametinib): its molecular gene targets from Open Targets (trametinib -> MAP2K1/MAP2K2, i.e. MEK1/2), the DisMech treatments it is an agent of, and the diseases those treatments are recorded for. Use this to answer questions that start from a drug. Recorded knowledge, not a recommendation."
+
+            input_schema {
+              type = "object"
+
+              property {
+                name        = "drug"
+                type        = "string"
+                description = "Drug name (exact, case-insensitive) such as trametinib or daratumumab, or a CHEBI/CHEMBL/NCIT id such as CHEBI:75998"
+                required    = true
+              }
+
+              property {
+                name        = "limit"
+                type        = "integer"
+                description = "Maximum edges to return, 1-200 (default 50)"
               }
             }
 

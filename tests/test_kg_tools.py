@@ -409,3 +409,65 @@ def test_evidence_lookup_resolves_mechanism_edges_by_id():
         _, session = run_tool(handler.get_evidence, {"edge_id": edge}, lambda *_: [])
         assert expect in session.queries[0], edge
         assert "{name:" not in session.queries[0]
+
+
+def agent_row(drug_id, drug_label, treatment_id="dismech:treatment:Trametinib", treatment_label="Trametinib"):
+    return row("has_agent", treatment_id, drug_id, subject_type="biolink:Treatment", subject_label=treatment_label,
+               object_type="biolink:Drug", object_label=drug_label, predicate="has_agent", pmid=None, snippet=None)
+
+
+def treatment_use_row(drug_treatment_id="dismech:treatment:Trametinib", drug_treatment_label="Trametinib",
+                      disease="Juvenile Myelomonocytic Leukemia"):
+    return row("association", JMML, drug_treatment_id, subject_type="Disease", subject_label=disease,
+               object_type="biolink:Treatment", object_label=drug_treatment_label,
+               predicate="dismech:has_recorded_treatment", record_name=drug_treatment_label, pmid=None, snippet=None)
+
+
+def drug_respond(rows, found=("CHEBI:75998", "trametinib")):
+    def responder(query, _parameters):
+        if "RETURN a.id AS id, a.label AS label" in query:
+            return [{"id": found[0], "label": found[1]}] if found else []
+        return list(rows)
+    return responder
+
+
+def test_drug_context_returns_targets_treatments_and_diseases():
+    rows = [agent_row("CHEBI:75998", "trametinib"), treatment_use_row(),
+            target_row("75998", "MAP2K1", 6840), target_row("75998", "MAP2K2", 6842)]
+    envelope, _ = run_tool(handler.get_drug_context, {"drug": "trametinib"}, drug_respond(rows))
+    assert "2 recorded gene target(s) and 1 recorded treatment use(s)" in envelope["summary"]
+    assert "Juvenile Myelomonocytic Leukemia" in envelope["summary"]
+    predicates = {e["predicate"] for e in envelope["graph"]["edges"]}
+    assert {"targets_gene", "has_agent", "dismech:has_recorded_treatment"} <= predicates
+    assert has_note(envelope, "not a treatment recommendation")
+
+
+def test_drug_resolves_by_id_and_name_with_the_right_query():
+    _, by_id = run_tool(handler.get_drug_context, {"drug": "CHEBI:75998"}, drug_respond([]))
+    assert "a.id = $id" not in by_id.queries[0] and "{id: $id}" in by_id.queries[0]
+    _, by_name = run_tool(handler.get_drug_context, {"drug": "trametinib"}, drug_respond([]))
+    assert "toLower(a.label) = toLower($name)" in by_name.queries[0]  # exact, not a partial match
+
+
+def test_unknown_drug_is_reported_not_guessed():
+    envelope, _ = run_tool(handler.get_drug_context, {"drug": "aspirin"}, drug_respond([], found=None))
+    assert envelope["graph"]["edges"] == []
+    assert has_note(envelope, "No drug matching 'aspirin'")
+
+
+def test_drug_target_list_is_capped():
+    many = [target_row("52717", f"PSM{i:02d}", 9000 + i) for i in range(25)]
+    rows = [agent_row("CHEBI:52717", "bortezomib", "dismech:treatment:PI", "Proteasome Inhibitor Therapy"),
+            treatment_use_row("dismech:treatment:PI", "Proteasome Inhibitor Therapy")] + many
+    envelope, _ = run_tool(handler.get_drug_context, {"drug": "bortezomib"},
+                           drug_respond(rows, found=("CHEBI:52717", "bortezomib")))
+    shown = [e for e in envelope["graph"]["edges"] if e["predicate"] == "targets_gene"]
+    assert len(shown) == handler.MAX_TARGETS_PER_AGENT
+    assert has_note(envelope, f"bortezomib has 25 recorded targets; only the first {handler.MAX_TARGETS_PER_AGENT}")
+
+
+def test_a_drug_with_no_target_is_reported():
+    rows = [agent_row("NCIT:C1", "somedrug"), treatment_use_row("dismech:treatment:X", "X")]
+    envelope, _ = run_tool(handler.get_drug_context, {"drug": "somedrug"},
+                           drug_respond(rows, found=("NCIT:C1", "somedrug")))
+    assert has_note(envelope, "No molecular target is recorded for somedrug")

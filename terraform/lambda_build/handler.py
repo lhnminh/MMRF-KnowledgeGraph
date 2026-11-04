@@ -996,6 +996,75 @@ def get_gene_disease_association(session, args, env):
                               f"{len(factors)} DisMech genetic factor(s), {len(subtypes)} DisMech subtype(s).")
 
 
+def _resolve_drug(session, value):
+    """(id, label) of a drug node from a ChEBI/ChEMBL/NCIT id or a name, or None.
+
+    A drug is an Entity that is the object of a HAS_AGENT edge. Matching a name is exact
+    (case-insensitive) so a partial word does not silently pick one of several drugs."""
+    if re.fullmatch(r"(CHEBI|CHEMBL|NCIT):\w+", value, re.I):
+        rows = _read(
+            session,
+            "MATCH (:Entity)-[:HAS_AGENT]->(a:Entity {id: $id}) RETURN a.id AS id, a.label AS label LIMIT 1",
+            {"id": value.upper() if value.upper().startswith(("CHEBI", "NCIT")) else value},
+        )
+    else:
+        rows = _read(
+            session,
+            "MATCH (:Entity)-[:HAS_AGENT]->(a:Entity) WHERE toLower(a.label) = toLower($name) "
+            "RETURN a.id AS id, a.label AS label ORDER BY id LIMIT 1",
+            {"name": value},
+        )
+    return (rows[0]["id"], rows[0]["label"]) if rows else None
+
+
+def get_drug_context(session, args, env):
+    """Everything the graph records about one drug: its gene targets (Open Targets), the DisMech
+    treatments it is an agent of, and the diseases those treatments are recorded for."""
+    drug = _required(args, "drug")
+    limit = _limit_arg(args)
+    resolved = _resolve_drug(session, drug)
+    if resolved is None:
+        env.limit(f"No drug matching '{drug}' (a name such as trametinib, or a CHEBI/CHEMBL/NCIT id) is an agent "
+                  "of any recorded treatment in the loaded graph. Drugs are limited to the agents DisMech names "
+                  "in its treatment records.")
+        return env.build("graph", f"No drug recorded for {drug}.")
+    drug_id, drug_label = resolved
+
+    query = f"""
+        MATCH (a:Entity {{id: $drug_id}})-[r:TARGETS_GENE]->(g:Entity)
+        RETURN {TARGETS_GENE_COLUMNS}
+        UNION ALL
+        MATCH (t:Entity)-[r:HAS_AGENT]->(a:Entity {{id: $drug_id}})
+        RETURN {AGENT_COLUMNS}
+        UNION ALL
+        MATCH (d:Disease)-[r:ASSOCIATION {{predicate: 'dismech:has_recorded_treatment'}}]->(o)-[:HAS_AGENT]->(a:Entity {{id: $drug_id}})
+        RETURN {ASSOCIATION_COLUMNS}
+    """
+    parameters = {"drug_id": drug_id}
+    env.set_query(query, parameters)
+    rows = _read(session, query, parameters)
+    targets = [r for r in rows if r["kind"] == "targets_gene"]
+    treatments = [r for r in rows if r["kind"] == "association"][:limit]
+    shown_targets = sorted(targets, key=lambda r: r["object_label"] or "")[:MAX_TARGETS_PER_AGENT]
+    for row in [r for r in rows if r["kind"] == "has_agent"] + treatments + shown_targets:
+        add_edge_row(env, row)
+
+    if not targets:
+        env.limit(f"No molecular target is recorded for {drug_label} ({drug_id}) in the loaded graph "
+                  "(none recorded). Targets come from Open Targets' mechanism-of-action record.")
+    if len(targets) > len(shown_targets):
+        env.limit(f"{drug_label} has {len(targets)} recorded targets; only the first {len(shown_targets)} "
+                  f"(alphabetical) are returned. Use kg_get_gene_context for any one gene.")
+    if not treatments:
+        env.limit(f"{drug_label} is in the graph as a drug agent but no disease treatment currently references it.")
+    env.limit("Open Targets drug targets are the drug's overall mechanism of action, not disease-specific, and "
+              "are not a treatment recommendation.")
+    diseases = sorted({r["subject_label"] for r in treatments})
+    disease_text = (" for " + ", ".join(diseases)) if diseases else ""
+    return env.build("graph", f"{drug_label} ({drug_id}): {len(targets)} recorded gene target(s) and "
+                              f"{len(treatments)} recorded treatment use(s){disease_text}.")
+
+
 def get_treatment_evidence(session, args, env):
     disease_id = _required(args, "disease_id")
     treatment, mechanism = args.get("treatment"), args.get("mechanism")
@@ -1293,6 +1362,7 @@ TOOLS = {
     "kg_get_gene_context": get_gene_context,
     "kg_get_gene_disease_association": get_gene_disease_association,
     "kg_get_treatment_evidence": get_treatment_evidence,
+    "kg_get_drug_context": get_drug_context,
     "kg_run_readonly_query": run_readonly_query,
 }
 

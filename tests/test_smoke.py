@@ -51,6 +51,8 @@ class HealthyGateway:
             return envelope(edges=[{"source": smoke.KRAS_ID, "target": smoke.JMML_ID, "source_dataset": "monarch"}])
         if name == "kg_get_treatment_evidence":
             return envelope(edges=[{"predicate": "targets_mechanism"}], evidence=[{"reference": smoke.TRAMETINIB_PMID}])
+        if name == "kg_get_drug_context":
+            return envelope(edges=[{"predicate": "targets_gene"}])
         raise AssertionError(name)
 
 
@@ -87,6 +89,16 @@ def test_a_graph_without_the_jmml_links_fails():
             return super().call_tool(name, **arguments)
 
     assert smoke.run_checks(NoJmml()) == ["JMML gene, mechanism and treatment links are returned"]
+
+
+def test_a_graph_without_drug_targets_fails():
+    class NoDrug(HealthyGateway):
+        def call_tool(self, name, **arguments):
+            if name == "kg_get_drug_context":
+                return envelope()
+            return super().call_tool(name, **arguments)
+
+    assert smoke.run_checks(NoDrug()) == ["drug targets are returned"]
 
 
 def test_an_accepted_write_query_fails():

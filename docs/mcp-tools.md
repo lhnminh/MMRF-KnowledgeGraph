@@ -1,6 +1,6 @@
 # Knowledge graph MCP tools
 
-For agents that use the multiple myeloma knowledge graph. There are eight read-only tools behind one AgentCore Gateway. The envelope they return is defined in [AD-004](adrs/0004-integration-seam-tool-contract-and-response-types.md).
+For agents that use the multiple myeloma knowledge graph. There are nine read-only tools behind one AgentCore Gateway. The envelope they return is defined in [AD-004](adrs/0004-integration-seam-tool-contract-and-response-types.md).
 
 ## Connect
 
@@ -25,13 +25,14 @@ Over MCP, every name has the target prefix: `kg-graph___kg_search_entities`, and
 
 | Tool | Use it to | Arguments |
 | --- | --- | --- |
-| `kg_search_entities` | Turn a plain-language term into a graph id. Start here. | `text` (required): a name fragment or exact id. `limit`: 1-200, default 20. |
+| `kg_search_entities` | Turn a plain-language term into a graph id. Finds diseases, phenotypes, genes, drugs and mechanisms. Start here. | `text` (required): a name fragment or exact id, such as a drug name or `CHEBI:75998`. `limit`: 1-200, default 20. |
 | `kg_get_phenotypes` | List the phenotypes recorded for a disease (Monarch and DisMech). A phenotype in both has one edge per source. | `disease_id` (required), such as `MONDO:0009693`. `limit`: 1-200, default 50. |
 | `kg_get_mechanism_paths` | Get DisMech mechanisms and the causal edges between them, with evidence. | `disease_id` (required). |
 | `kg_get_evidence` | Look up the evidence for one edge, or every edge citing a reference. | Exactly one of `edge_id` (from `graph.edges[].id`) or `reference` (such as `PMID:34201396` or `infores:orphanet`). |
 | `kg_get_gene_context` | See everything recorded about one human gene, per source: Monarch gene-disease associations, DisMech genetic factors, the subtypes the gene defines, and the drugs that act on it (Open Targets). Says "none recorded" for Monarch or DisMech when a source has nothing. | `gene` (required): an HGNC id such as `HGNC:6407` or an approved symbol such as `KRAS`. `limit`: 1-200, default 50. |
 | `kg_get_gene_disease_association` | Get the link between one gene and one disease from each source: the Monarch association (relationship, knowledge source, disease id), the DisMech genetic factor and the subtype the gene defines. With a `variant`, says whether anything exists at that specificity. | `gene` and `disease_id` (both required). `variant`: optional, such as `KRAS G12D`. |
 | `kg_get_treatment_evidence` | Get a disease's recorded treatments with their agents, the mechanism each acts on (with that link's evidence and the mechanism's place in the disease record), and the cited evidence text. Also returns each agent's molecular targets from Open Targets (up to 10 per agent) and lists treatments with no mechanism link and agents with no recorded target. | `disease_id` (required). `treatment`, `mechanism`: optional name filters, such as `trametinib` or `RAS/MAPK`. |
+| `kg_get_drug_context` | Everything recorded about one drug: its gene targets (Open Targets), the treatments it is an agent of, and the diseases those treat. Start here for a drug question. | `drug` (required): a name such as `trametinib`, or a `CHEBI`/`CHEMBL`/`NCIT` id. `limit`: 1-200, default 50. |
 | `kg_run_readonly_query` | Ask something no named tool covers. Use this last. | `query` (required): one openCypher read. `parameters`: values for `$name` placeholders. |
 
 ### Limits on `kg_run_readonly_query`
@@ -121,7 +122,7 @@ On `ASSOCIATION`, Monarch edges use `primary_knowledge_source` and `publications
 
 **Not available yet:**
 
-- CIViC data, and Open Targets beyond drug targets (its gene-disease associations and tractability), so there are no variant or target-prioritization answers. Genes are limited to what Monarch, DisMech and the drug targets name.
+- CIViC data, and Open Targets beyond drug targets (its gene-disease associations and tractability), so there are no variant or target-prioritization answers. Genes are limited to what Monarch, DisMech and the drug targets name. For a drug's targets use `kg_get_drug_context`; for a gene's drugs use `kg_get_gene_context`.
 - Variant-level records. Associations are at gene level, so `kg_get_gene_disease_association` reports a requested variant as a change in specificity.
 - A drug target in the DisMech record itself. DisMech names targets such as MEK1/2 only in descriptions. The target edges come from Open Targets, so the tools present them as a separate source from the trial evidence. Proteasome inhibitors list every proteasome subunit (38 genes), so responses cap targets at 10 per agent.
 - Trial results as structured data. Population and response appear only in the quoted evidence snippet.
