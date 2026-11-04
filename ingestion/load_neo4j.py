@@ -80,18 +80,27 @@ def load_dismech(tx, dismech: dict, version: str) -> None:
     tx.run("MERGE (d:Disease {id: $id}) SET d.name = $name", id=disease_id, name=dismech["name"])
 
     for step in dismech["pathophysiology"]:
+        evidence = (step.get("evidence") or [{}])[0]
         tx.run(
             """
             MERGE (m:Mechanism {name: $name})
             SET m.description = $description, m.source = 'dismech', m.source_version = $version
             MERGE (d:Disease {id: $disease_id})
             MERGE (d)-[h:HAS_MECHANISM]->(m)
-            SET h.source = 'dismech', h.source_version = $version, h.edge_origin = 'recorded'
+            SET h.source = 'dismech',
+                h.source_version = $version,
+                h.edge_origin = 'recorded',
+                h.evidence_pmid = $pmid,
+                h.evidence_snippet = $snippet,
+                h.dismech_explanation = $explanation
             """,
             name=step["name"],
             description=step.get("description"),
             disease_id=disease_id,
             version=version,
+            pmid=evidence.get("reference"),
+            snippet=evidence.get("snippet"),
+            explanation=evidence.get("explanation"),
         )
         for downstream in step.get("downstream", []):
             evidence = (downstream.get("evidence") or [{}])[0]

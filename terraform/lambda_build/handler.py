@@ -247,7 +247,7 @@ HAS_MECHANISM_COLUMNS = """
     'has_mechanism' AS kind, d.id AS subject_id, d.name AS subject_label, 'Disease' AS subject_type,
     null AS subject_description, 'has_mechanism' AS predicate,
     a.name AS object_id, a.name AS object_label, 'Mechanism' AS object_type, a.description AS object_description,
-    null AS pmid, null AS snippet, null AS explanation,
+    h.evidence_pmid AS pmid, h.evidence_snippet AS snippet, h.dismech_explanation AS explanation,
     null AS publications, null AS primary_knowledge_source,
     h.source AS source, h.source_version AS source_version, h.edge_origin AS edge_origin
 """
@@ -278,7 +278,7 @@ def add_edge_row(env, row):
         return eid
 
     evidence_ids = []
-    if kind == "leads_to" and row["pmid"]:
+    if kind in ("leads_to", "has_mechanism") and row["pmid"]:
         evidence_ids.append(env.add_evidence(f"{eid}#{row['pmid']}", row["pmid"], dataset, version, row["snippet"]))
     elif kind == "association":
         references = _as_list(row["publications"]) or _as_list(row["primary_knowledge_source"])
@@ -299,12 +299,18 @@ def add_edge_row(env, row):
     if kind == "has_mechanism":
         env.observations.append({
             "text": f"DisMech lists {row['object_label']} as a pathophysiology mechanism of {row['subject_label']}.",
-            "refs": [],
+            "refs": evidence_ids,
         })
         if row["object_description"]:
             env.observations.append({
                 "text": f"DisMech describes {row['object_label']}: {row['object_description']}",
-                "refs": [],
+                "refs": evidence_ids,
+            })
+        if row["explanation"]:
+            env.interpretation.append({
+                "text": row["explanation"],
+                "basis": "source_curator_commentary",
+                "refs": evidence_ids,
             })
     elif kind == "leads_to":
         env.observations.append({
@@ -324,7 +330,7 @@ def add_edge_row(env, row):
             "refs": evidence_ids,
         })
 
-    if kind != "has_mechanism" and not evidence_ids:
+    if not evidence_ids:
         env._edges_without_evidence.append(eid)
     return eid
 
