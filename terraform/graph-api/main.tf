@@ -132,19 +132,23 @@ data "archive_file" "api" {
 
 resource "aws_lambda_function" "api" {
   #checkov:skip=CKV_AWS_117:Sandbox viewer Lambda only calls other Lambdas and SSM via AWS APIs; VPC placement would need NAT setup with no security benefit here
-  #checkov:skip=CKV_AWS_115:No reserved concurrency set; low-traffic sandbox endpoint, shared account concurrency pool is sufficient
   #checkov:skip=CKV_AWS_116:No DLQ; synchronous API Gateway invocation has no retry/async failure path for a DLQ to catch
   #checkov:skip=CKV_AWS_272:Code-signing not configured; sandbox deployment, no code-signing pipeline exists yet
-  function_name    = var.name
-  role             = aws_iam_role.api.arn
-  runtime          = "python3.12"
-  architectures    = ["arm64"]
-  handler          = "handler.handler"
-  filename         = data.archive_file.api.output_path
-  source_code_hash = data.archive_file.api.output_base64sha256
-  timeout          = 28
-  memory_size      = 256
-  kms_key_arn      = aws_kms_key.graph_api.arn
+  function_name                  = var.name
+  role                           = aws_iam_role.api.arn
+  runtime                        = "python3.12"
+  architectures                  = ["arm64"]
+  handler                        = "handler.handler"
+  filename                       = data.archive_file.api.output_path
+  source_code_hash               = data.archive_file.api.output_base64sha256
+  timeout                        = 28
+  memory_size                    = 256
+  kms_key_arn                    = aws_kms_key.graph_api.arn
+  reserved_concurrent_executions = 5
+
+  tracing_config {
+    mode = "Active"
+  }
   environment {
     variables = {
       GRAPH_FUNCTION_NAME = data.aws_lambda_function.graph.function_name
