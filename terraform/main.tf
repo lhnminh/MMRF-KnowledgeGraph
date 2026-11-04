@@ -57,22 +57,42 @@ resource "aws_vpc_security_group_ingress_rule" "neptune_kg_graph" {
   to_port                      = 8182
 }
 
-resource "aws_vpc_security_group_egress_rule" "neptune_vpc" {
-  security_group_id = aws_security_group.neptune.id
-  cidr_ipv4         = aws_vpc.kg.cidr_block
-  ip_protocol       = "-1"
+# No egress rule on this group: security groups are stateful, so Neptune does not need one to
+# reply to the kg-graph/kg-ingest Bolt connections above. A rule allowing all protocols/ports to
+# the whole VPC CIDR was removed here on 2026-11-04 as unused attack surface.
+
+# The default parameter group can't turn on audit logging (it's read-only); a custom group in
+# the same family can. neptune_enable_audit_log is a static parameter: it takes effect after the
+# instance in aws_neptune_cluster_instance.this next reboots, not on apply.
+resource "aws_neptune_cluster_parameter_group" "this" {
+  name   = "${var.name}-cluster-params"
+  family = "neptune1.4"
+
+  parameter {
+    name  = "neptune_enable_audit_log"
+    value = "1"
+  }
+}
+
+resource "aws_cloudwatch_log_group" "neptune_audit" {
+  name              = "/aws/neptune/${var.name}-cluster/audit"
+  retention_in_days = 14
 }
 
 resource "aws_neptune_cluster" "this" {
-  cluster_identifier                  = "${var.name}-cluster"
-  engine                              = "neptune"
-  engine_version                      = "1.4.5.0"
-  neptune_subnet_group_name           = aws_neptune_subnet_group.this.name
-  vpc_security_group_ids              = [aws_security_group.neptune.id]
-  skip_final_snapshot                 = true
-  apply_immediately                   = true
-  iam_database_authentication_enabled = false
-  deletion_protection                 = false
+  cluster_identifier                   = "${var.name}-cluster"
+  engine                               = "neptune"
+  engine_version                       = "1.4.5.0"
+  neptune_subnet_group_name            = aws_neptune_subnet_group.this.name
+  neptune_cluster_parameter_group_name = aws_neptune_cluster_parameter_group.this.name
+  vpc_security_group_ids               = [aws_security_group.neptune.id]
+  skip_final_snapshot                  = true
+  apply_immediately                    = true
+  iam_database_authentication_enabled  = false
+  enable_cloudwatch_logs_exports       = ["audit"]
+  # Protects against an accidental destroy or a Terraform change that forces replacement
+  # (see the storage_encrypted comment below); scripts/teardown.sh must disable this first.
+  deletion_protection = true
   # Must stay in line with the live cluster: changing it deletes and recreates the cluster and
   # loses all data. Read `terraform plan` for "forces replacement" before every apply.
   storage_encrypted = true
@@ -81,6 +101,8 @@ resource "aws_neptune_cluster" "this" {
     min_capacity = 1
     max_capacity = 8
   }
+
+  depends_on = [aws_cloudwatch_log_group.neptune_audit]
 }
 
 resource "aws_neptune_cluster_instance" "this" {

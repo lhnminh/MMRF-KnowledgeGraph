@@ -47,6 +47,11 @@ resource "aws_iam_role_policy" "kg_graph_neptune_read" {
   })
 }
 
+resource "aws_cloudwatch_log_group" "loader_lambda" {
+  name              = "/aws/lambda/${var.name}-kg-graph"
+  retention_in_days = 14
+}
+
 resource "aws_lambda_function" "loader" {
   function_name = "${var.name}-kg-graph"
   role          = aws_iam_role.loader_lambda.arn
@@ -71,4 +76,6 @@ resource "aws_lambda_function" "loader" {
       NEPTUNE_IAM_AUTH = "true"
     }
   }
+
+  depends_on = [aws_cloudwatch_log_group.loader_lambda]
 }

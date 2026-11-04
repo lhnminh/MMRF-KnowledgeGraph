@@ -8,6 +8,24 @@ resource "aws_s3_bucket" "ingest" {
   force_destroy = true
 }
 
+resource "aws_s3_bucket_server_side_encryption_configuration" "ingest" {
+  bucket = aws_s3_bucket.ingest.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "ingest" {
+  bucket                  = aws_s3_bucket.ingest.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
 # The VPC has no internet route, so this is how the Lambda reaches S3. Gateway endpoints are free.
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.kg.id
@@ -100,6 +118,11 @@ resource "aws_iam_role_policy" "ingest_lambda" {
   })
 }
 
+resource "aws_cloudwatch_log_group" "ingest_lambda" {
+  name              = "/aws/lambda/${var.name}-ingest"
+  retention_in_days = 14
+}
+
 resource "aws_lambda_function" "ingest" {
   function_name = "${var.name}-ingest"
   role          = aws_iam_role.ingest_lambda.arn
@@ -131,5 +154,6 @@ resource "aws_lambda_function" "ingest" {
     aws_vpc_security_group_ingress_rule.neptune_ingest,
     aws_vpc_security_group_egress_rule.ingest_neptune,
     aws_vpc_security_group_egress_rule.ingest_s3,
+    aws_cloudwatch_log_group.ingest_lambda,
   ]
 }

@@ -50,6 +50,12 @@ fi
 cleanup() { if [ "$CREATED_ZIP" = 1 ]; then rm -f "$ZIP"; fi; }
 trap cleanup EXIT
 
+# Neptune has deletion_protection = true (guards against an accidental destroy); disable it
+# first or the destroy below fails on the cluster.
+echo "== Disabling Neptune deletion protection"
+aws neptune modify-db-cluster --region "$REGION" --db-cluster-identifier "$NAME-cluster" \
+  --no-deletion-protection --apply-immediately >/dev/null 2>&1 || true
+
 # Terraform orders the deletes from the dependency graph (Gateway target before Gateway,
 # Neptune instance before cluster, Lambda before its subnets and security group). Lambda
 # VPC network interfaces can take 20+ minutes to release, so the last step may be slow.
