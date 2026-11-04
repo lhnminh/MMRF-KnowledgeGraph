@@ -53,6 +53,42 @@ QUERY_MAX_HOPS = 5
 LABEL_DATASET = {"Entity": "monarch", "Mechanism": "dismech"}
 DATASET_NAMES = {"monarch": "Monarch", "dismech": "DisMech"}
 
+# Steps DisMech's mechanism descriptions state but its record has no edge for (AD-004). DisMech has no
+# field for these, so they are written by hand from all eight descriptions at commit b1ca0b2. Each is
+# (mechanism whose description says it, upstream, downstream names, what the description says).
+# A downstream name is dropped once a leads_to edge records that step.
+DESCRIBED_WITHOUT_EDGE = {
+    "MONDO:0009693": [
+        ("Clonal Plasma Cell Proliferation", "Genetic alterations", ["Clonal Plasma Cell Proliferation"],
+         "IGH translocations and hyperdiploidy drive the clonal expansion. DisMech's genetic records are not loaded."),
+        ("Monoclonal Immunoglobulin Production", "Monoclonal Immunoglobulin Production", ["Cast nephropathy"],
+         "these proteins deposit in the kidneys and cause cast nephropathy. The graph has only the direct edge "
+         "to Renal Impairment."),
+        ("Osteolytic Bone Disease", "Myeloma cells", ["Osteoclast activation", "Osteoblast suppression"],
+         "myeloma cells do this by secreting RANKL, MIP-1alpha and DKK1. The graph has only the direct edge "
+         "from Clonal Plasma Cell Proliferation to Osteolytic Bone Disease."),
+        ("Osteolytic Bone Disease", "Osteolytic Bone Disease", ["Lytic bone lesions", "Pathologic fractures", "Bone pain"],
+         "uncoupled bone remodeling leads to these."),
+        ("Bone Marrow Failure", "Bone Marrow Failure", ["Anemia", "Neutropenia", "Thrombocytopenia"],
+         "displacing normal blood-forming cells leads to these."),
+        ("Obesity-Driven Metabolic Dysregulation", "Obesity-Driven Metabolic Dysregulation", ["Increased mortality"],
+         "severe obesity at diagnosis is associated with it."),
+        ("Immune Dysregulation", "Multiple Myeloma", ["Immune Dysregulation"],
+         "myeloma causes this immunodeficiency. The only causal edge into Immune Dysregulation is from "
+         "Obesity-Driven Metabolic Dysregulation."),
+        ("Immune Dysregulation", "Immune Dysregulation", ["Recurrent infections"],
+         "it leads to increased susceptibility to infections."),
+        ("Renal Impairment", "Hypercalcemia", ["Renal Impairment"],
+         "hypercalcemia contributes to renal dysfunction, including through nephrocalcinosis."),
+        ("Renal Impairment", "Light chain amyloidosis and light chain deposition disease", ["Renal Impairment"],
+         "these are additional causes of renal dysfunction."),
+        ("Hypercalcemia", "Renal Impairment", ["Hypercalcemia"],
+         "impaired renal calcium excretion makes hypercalcemia worse."),
+        ("Hypercalcemia", "Hypercalcemia", ["Confusion", "Constipation", "Cardiac arrhythmias"],
+         "it contributes to these."),
+    ],
+}
+
 _driver = None
 _driver_created_at = 0.0
 
@@ -301,9 +337,11 @@ def add_edge_row(env, row):
             "text": f"DisMech lists {row['object_label']} as a pathophysiology mechanism of {row['subject_label']}.",
             "refs": evidence_ids,
         })
+        # Descriptions explain causes that no edge records, so they stay out of observations.
         if row["object_description"]:
-            env.observations.append({
+            env.interpretation.append({
                 "text": f"DisMech describes {row['object_label']}: {row['object_description']}",
+                "basis": "source_curator_commentary",
                 "refs": evidence_ids,
             })
         if row["explanation"]:
@@ -331,10 +369,13 @@ def add_edge_row(env, row):
                     f"{row['object_label']} ({row['object_id']}).{frequency}",
             "refs": evidence_ids,
         })
+        # A phenotype description often explains the cause ("anemia due to ..."), which is not
+        # what the association edge records, so it stays out of observations.
         if row["object_description"]:
-            env.observations.append({
+            env.interpretation.append({
                 "text": f"{source_name} describes {row['object_label']} in {row['subject_label']}: "
                         f"{row['object_description']}",
+                "basis": "source_curator_commentary",
                 "refs": evidence_ids,
             })
         if row["explanation"]:
@@ -493,6 +534,17 @@ def get_mechanism_paths(session, args, env):
     if unlinked:
         env.limit("No causal (leads_to) edge is recorded into or out of: " + ", ".join(unlinked) + ".")
     env.limit("Only the first evidence item of each DisMech causal edge is loaded into the graph.")
+    recorded = {(r["subject_id"], r["object_id"]) for r in rows if r["kind"] == "leads_to"}
+    gap_found = False
+    for described_in, upstream, downstream, text in DESCRIBED_WITHOUT_EDGE.get(disease_id, []):
+        missing = [name for name in downstream if (upstream, name) not in recorded]
+        if described_in in steps and missing:
+            gap_found = True
+            env.limit(f"Not a recorded edge: {upstream} -> {', '.join(missing)}. "
+                      f"DisMech's description of {described_in} says {text}")
+    if gap_found:
+        env.limit("Those 'not a recorded edge' steps were identified by hand from the mechanism descriptions. "
+                  "No edge links a mechanism to a phenotype, even where they share a name, as Hypercalcemia does.")
 
     edge_count = sum(1 for r in rows if r["kind"] == "leads_to")
     disease = next(r["subject_label"] for r in rows if r["kind"] == "has_mechanism")

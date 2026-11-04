@@ -28,7 +28,7 @@ Each id is registered once in `env.evidence` as `{id, reference, snippet, source
 
 ## 3. Evidence id → claim
 
-Every entry in `observations[]` and `interpretation[]` carries a `refs: [...]` array of evidence ids — this is the actual citation on the claim. `interpretation` entries also carry `basis: "source_curator_commentary"`, since DisMech's `explanation` field is curator-added reasoning, not a graph-encoded fact, and must not be shown as equivalent to an `observations` claim.
+Every entry in `observations[]` and `interpretation[]` carries a `refs: [...]` array of evidence ids — this is the actual citation on the claim. `interpretation` entries also carry `basis: "source_curator_commentary"`, since DisMech's `explanation` field is curator-added reasoning, not a graph-encoded fact, and must not be shown as equivalent to an `observations` claim. DisMech's mechanism and phenotype descriptions go here too, because they often explain a cause ("anemia due to ...") that no edge records.
 
 The final envelope exposes `evidence` as a flat array (the lookup table) and `refs` arrays that point into it by id, so an agent can render "claim — sourced from PMID:x, snippet: '...'" without a second graph query.
 

@@ -88,14 +88,14 @@ Each result's `content[0].text` is a JSON string holding this envelope:
 (:Mechanism)-[:LEADS_TO {source, source_version, edge_origin, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Mechanism)
 ```
 
-On `ASSOCIATION`, Monarch edges use `primary_knowledge_source` and `publications`, and DisMech edges use the other citation properties. Filter on `source` to separate them. `publications` is a `;`-separated string. `dismech_explanation` is curator commentary, so report it as interpretation.
+On `ASSOCIATION`, Monarch edges use `primary_knowledge_source` and `publications`, and DisMech edges use the other citation properties. Filter on `source` to separate them. `publications` is a `;`-separated string. `dismech_explanation` and DisMech's `description` on a `Mechanism` or `ASSOCIATION` are curator commentary, so report them as interpretation.
 
 **Not available yet:**
 
 - Open Targets and CIViC data, so there are no gene, drug or variant answers.
 - `kg_get_gene_context`, which AD-004 plans.
 - DisMech's genetic and treatment records. Only its mechanisms and phenotypes are loaded.
-- Links between phenotypes and mechanisms. Anemia, for example, is a phenotype with no edge from Bone Marrow Failure.
+- Links between phenotypes and mechanisms. Anemia, for example, is a phenotype with no edge from Bone Marrow Failure. `kg_get_mechanism_paths` lists every step its mechanism descriptions state without an edge in `limitations`, beginning `Not a recorded edge:`.
 
 ## Example: what leads to hypercalcemia?
 
