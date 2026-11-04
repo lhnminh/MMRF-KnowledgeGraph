@@ -3,16 +3,11 @@
 # the status field in the handler's log line shows them, so a metric filter reads that line.
 # A filter also avoids PutMetricData, which the Lambdas could not reach: their VPC has no route to it.
 
-# Lambda created this log group when it first ran. A filter needs the group to exist on a fresh
-# deploy, so Terraform owns it. An existing stack must import it first (see the README).
-resource "aws_cloudwatch_log_group" "kg_graph" {
-  name              = "/aws/lambda/${aws_lambda_function.loader.function_name}"
-  retention_in_days = 14
-}
-
+# The kg-graph log group is already managed as aws_cloudwatch_log_group.loader_lambda
+# (terraform/loader_lambda.tf), imported there after Lambda auto-created it on first run.
 resource "aws_cloudwatch_log_metric_filter" "kg_tool_errors" {
   name           = "${var.name}-kg-tool-errors"
-  log_group_name = aws_cloudwatch_log_group.kg_graph.name
+  log_group_name = aws_cloudwatch_log_group.loader_lambda.name
   pattern        = "{ ($.event = \"kg_tool_call\") && ($.status = \"error\") }"
 
   metric_transformation {

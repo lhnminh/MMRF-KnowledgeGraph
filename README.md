@@ -159,12 +159,6 @@ The tools, their arguments and the response format are described in [docs/mcp-to
 terraform -chdir=terraform plan -var="alert_email=you@example.com" -out=tfplan
 ```
 
-**Before the first apply on an existing stack, import the kg-graph log group once.** Lambda already created it, so the apply fails without this. In Git Bash, keep the `MSYS_NO_PATHCONV=1` prefix so the path isn't rewritten:
-
-```sh
-MSYS_NO_PATHCONV=1 terraform -chdir=terraform import aws_cloudwatch_log_group.kg_graph /aws/lambda/mmrf-kg-kg-graph
-```
-
 These alarms don't cover an empty graph, because every call still succeeds. The smoke test above catches that.
 
 ## Tests
