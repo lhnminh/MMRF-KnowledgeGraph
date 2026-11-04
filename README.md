@@ -166,6 +166,10 @@ terraform -chdir=terraform plan -var="alert_email=you@example.com" -out=tfplan
 
 These alarms don't cover an empty graph, because every call still succeeds. The smoke test above catches that.
 
+### Security scanning
+
+A [Checkov](https://www.checkov.io/) scan runs in GitHub Actions ([`.github/workflows/terraform-security-scan.yml`](.github/workflows/terraform-security-scan.yml)) on every push to `main` and every pull request that touches `terraform/**`, and can also be triggered manually from the Actions tab. It's report-only (`soft_fail: true`): findings are uploaded as SARIF to the repo's Security > Code scanning tab, but the check never blocks a merge. Findings that don't apply are suppressed inline with a `#checkov:skip=<rule_id>:<reason>` comment next to the resource.
+
 ## Tests
 
 ```sh

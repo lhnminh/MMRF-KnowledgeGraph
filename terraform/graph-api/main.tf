@@ -46,6 +46,40 @@ data "aws_lambda_function" "graph" {
   function_name = var.graph_function_name
 }
 
+resource "aws_kms_key" "graph_api" {
+  description         = "${var.name} key for Lambda env vars, log groups, and SSM parameter encryption"
+  enable_key_rotation = true
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "EnableIAMUserPermissions"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${var.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      },
+      {
+        Sid       = "AllowCloudWatchLogsEncryption"
+        Effect    = "Allow"
+        Principal = { Service = "logs.${var.region}.amazonaws.com" }
+        Action    = ["kms:Encrypt*", "kms:Decrypt*", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:Describe*"]
+        Resource  = "*"
+        Condition = {
+          ArnLike = {
+            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${var.region}:${var.account_id}:log-group:*"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_kms_alias" "graph_api" {
+  name          = "alias/${var.name}"
+  target_key_id = aws_kms_key.graph_api.key_id
+}
+
 resource "random_password" "access_token" {
   length  = 48
   special = false
@@ -56,6 +90,7 @@ resource "aws_ssm_parameter" "access_token" {
   description = "Sandbox graph viewer bearer token; never embed in frontend assets or URLs"
   type        = "SecureString"
   value       = random_password.access_token.result
+  key_id      = aws_kms_key.graph_api.arn
 }
 
 resource "aws_iam_role" "api" {
@@ -68,7 +103,8 @@ resource "aws_iam_role" "api" {
 
 resource "aws_cloudwatch_log_group" "lambda" {
   name              = "/aws/lambda/${var.name}"
-  retention_in_days = 3
+  retention_in_days = 365
+  kms_key_id        = aws_kms_key.graph_api.arn
 }
 
 resource "aws_iam_role_policy" "api" {
@@ -81,7 +117,8 @@ resource "aws_iam_role_policy" "api" {
       {
         Effect   = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"],
         Resource = "${aws_cloudwatch_log_group.lambda.arn}:*"
-      }
+      },
+      { Effect = "Allow", Action = "kms:Decrypt", Resource = aws_kms_key.graph_api.arn }
     ]
   })
 }
@@ -93,6 +130,10 @@ data "archive_file" "api" {
   excludes    = ["__pycache__", "__pycache__/**"]
 }
 
+#checkov:skip=CKV_AWS_117:Sandbox viewer Lambda only calls other Lambdas and SSM via AWS APIs; VPC placement would need NAT setup with no security benefit here
+#checkov:skip=CKV_AWS_115:No reserved concurrency set; low-traffic sandbox endpoint, shared account concurrency pool is sufficient
+#checkov:skip=CKV_AWS_116:No DLQ; synchronous API Gateway invocation has no retry/async failure path for a DLQ to catch
+#checkov:skip=CKV_AWS_272:Code-signing not configured; sandbox deployment, no code-signing pipeline exists yet
 resource "aws_lambda_function" "api" {
   function_name    = var.name
   role             = aws_iam_role.api.arn
@@ -103,6 +144,7 @@ resource "aws_lambda_function" "api" {
   source_code_hash = data.archive_file.api.output_base64sha256
   timeout          = 28
   memory_size      = 256
+  kms_key_arn      = aws_kms_key.graph_api.arn
   environment {
     variables = {
       GRAPH_FUNCTION_NAME = data.aws_lambda_function.graph.function_name
@@ -142,7 +184,8 @@ resource "aws_lambda_permission" "gateway" {
 
 resource "aws_cloudwatch_log_group" "http" {
   name              = "/aws/apigateway/${var.name}"
-  retention_in_days = 3
+  retention_in_days = 365
+  kms_key_id        = aws_kms_key.graph_api.arn
 }
 
 resource "aws_apigatewayv2_stage" "default" {

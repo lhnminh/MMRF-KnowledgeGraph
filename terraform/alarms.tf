@@ -20,6 +20,7 @@ resource "aws_cloudwatch_log_metric_filter" "kg_tool_errors" {
 
 # Topic encryption is left off: alarms can't publish to a topic using the AWS managed SNS key, and
 # these messages hold only alarm names and states.
+#checkov:skip=CKV_AWS_26:CloudWatch alarms cannot publish to a KMS-encrypted SNS topic; messages carry only alarm name/state, no sensitive data
 resource "aws_sns_topic" "kg_alerts" {
   name = "${var.name}-alerts"
 }
