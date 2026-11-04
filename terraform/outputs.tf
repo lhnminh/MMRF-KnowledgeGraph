@@ -14,6 +14,10 @@ output "ingest_function" {
   value = aws_lambda_function.ingest.function_name
 }
 
+output "alerts_topic_arn" {
+  value = aws_sns_topic.kg_alerts.arn
+}
+
 output "gateway_url" {
   value = aws_bedrockagentcore_gateway.kg.gateway_url
 }

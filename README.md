@@ -139,15 +139,33 @@ Open Targets and CIViC are not loaded into Neptune yet. The ETL above can export
 
 ### Test the Gateway
 
-`scripts/test_gateway.py` SigV4-signs the same `initialize` → `tools/list` → `tools/call` MCP sequence another team's agent would send, so it checks the Gateway itself rather than invoking the Lambda directly:
+`scripts/test_gateway.py` SigV4-signs the same MCP calls another team's agent would send, so it checks the Gateway itself rather than invoking the Lambda directly. Run it after every deploy or ingest and before a demo:
 
 ```sh
 uv run python scripts/test_gateway.py
 ```
 
+It prints PASS or FAIL for each check and exits non-zero if any fail. It checks the tool list, the graph's exact size, each read tool's answers and that a write query is rejected, because an empty graph otherwise answers normally. Every call is read-only. When the loaded data changes, update the expected counts at the top of the script and in [docs/mcp-tools.md](docs/mcp-tools.md).
+
 Needs credentials for an identity the Gateway's AWS_IAM authorizer accepts. It reads the Gateway URL from `terraform -chdir=terraform output -raw gateway_url` by default, or pass `--gateway-url` to override.
 
 The tools, their arguments and the response format are described in [docs/mcp-tools.md](docs/mcp-tools.md).
+
+### Alarms
+
+`terraform/alarms.tf` sends an SNS alert when a kg-graph tool fails to query the graph, or when either Lambda crashes or times out. To receive them, set `alert_email` and click the link in the confirmation email:
+
+```sh
+terraform -chdir=terraform plan -var="alert_email=you@example.com" -out=tfplan
+```
+
+**Before the first apply on an existing stack, import the kg-graph log group once.** Lambda already created it, so the apply fails without this. In Git Bash, keep the `MSYS_NO_PATHCONV=1` prefix so the path isn't rewritten:
+
+```sh
+MSYS_NO_PATHCONV=1 terraform -chdir=terraform import aws_cloudwatch_log_group.kg_graph /aws/lambda/mmrf-kg-kg-graph
+```
+
+These alarms don't cover an empty graph, because every call still succeeds. The smoke test above catches that.
 
 ## Tests
 
@@ -156,7 +174,7 @@ uv run pytest
 uv run ruff check src scripts tests ingestion/load_neo4j.py terraform/lambda_build/handler.py
 ```
 
-Tests cover provenance-preserving exports and the ingest loader. They do not establish scientific validity or live AWS connectivity.
+Tests cover provenance-preserving exports, the ingest loader, the tool logic and the smoke test's failure checks. They do not establish scientific validity or live AWS connectivity.
 
 ## Teardown
 

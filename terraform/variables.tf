@@ -10,6 +10,12 @@ variable "name" {
   default     = "mmrf-kg"
 }
 
+variable "alert_email" {
+  description = "Email address for knowledge graph alarms. Leave unset to create the alarms with no subscriber."
+  type        = string
+  default     = null
+}
+
 variable "neptune_instance_class" {
   description = "Neptune instance class"
   type        = string

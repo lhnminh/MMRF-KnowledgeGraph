@@ -7,7 +7,7 @@ For agents that use the multiple myeloma knowledge graph. There are five read-on
 | | |
 | --- | --- |
 | **URL** | `https://mmrf-kg-gateway-hjyd9sqogd.gateway.bedrock-agentcore.us-west-2.amazonaws.com/mcp` (also `terraform output gateway_url`) |
-| **Protocol** | MCP over HTTPS |
+| **Protocol** | MCP over HTTPS. After `initialize`, send the `MCP-Protocol-Version` header with the version it returned, or the Gateway answers HTTP 400. MCP client libraries normally do this for you. |
 | **Auth** | AWS SigV4, signing service `bedrock-agentcore`, region `us-west-2` |
 | **IAM permission** | `bedrock-agentcore:InvokeGateway` on `arn:aws:bedrock-agentcore:us-west-2:548574235556:gateway/mmrf-kg-gateway-hjyd9sqogd` |
 
