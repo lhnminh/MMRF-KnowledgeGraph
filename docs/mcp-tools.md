@@ -64,6 +64,8 @@ Each result's `content[0].text` is a JSON string holding this envelope:
 
 `kg_run_readonly_query` returns `result_type: "table"` with an added `table: { "columns": [], "rows": [] }`. Rejected input and failures return `result_type: "text"`.
 
+Every tool declares an `outputSchema` matching this shape, so a client that negotiates MCP protocol version `2025-06-18` or later should also get the envelope back as `structuredContent`, avoiding a second JSON parse of `content[0].text`. As of writing, the Gateway itself still negotiates protocol version `2025-03-26` (which predates `outputSchema`/`structuredContent`), so `structuredContent` isn't populated yet — only `content[0].text`. This should start working with no changes on our side once AgentCore Gateway updates its MCP protocol support.
+
 ### Rules for your agent
 
 - **Don't rely on `isError`.** Rejected input and failed queries still report `isError: false`. Read `summary` and `limitations`.

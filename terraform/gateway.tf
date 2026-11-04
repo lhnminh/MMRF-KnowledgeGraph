@@ -72,6 +72,135 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
                 description = "Maximum entities to return, 1-200 (default 20)"
               }
             }
+
+            output_schema {
+              type        = "object"
+              description = "AD-004 envelope (contract_version 0.2): observations are recorded facts, interpretation is added explanation, limitations state what the answer can't support."
+
+              property {
+                name     = "contract_version"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "result_type"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "summary"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name        = "observations"
+                type        = "array"
+                description = "What a source record states, each with a refs array of evidence ids."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "interpretation"
+                type        = "array"
+                description = "Curator explanation, not an established fact. Each item carries basis and refs."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name     = "graph"
+                type     = "object"
+                required = true
+
+                property {
+                  name       = "nodes"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "edges"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+
+              property {
+                name        = "evidence"
+                type        = "array"
+                description = "Flat lookup table of citations; observations/interpretation refs point into this by id."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "query"
+                type        = "object"
+                description = "The openCypher query that ran, present when one did."
+
+                property {
+                  name = "language"
+                  type = "string"
+                }
+
+                property {
+                  name = "text"
+                  type = "string"
+                }
+
+                property {
+                  name = "parameters"
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "limitations"
+                type        = "array"
+                description = "What the answer can't support. Always pass these on."
+                required    = true
+
+                items {
+                  type = "string"
+                }
+              }
+
+              property {
+                name     = "trace"
+                type     = "object"
+                required = true
+
+                property {
+                  name = "request_id"
+                  type = "string"
+                }
+
+                property {
+                  name       = "plan"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "tool_calls"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+            }
           }
 
           inline_payload {
@@ -94,6 +223,135 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
                 description = "Maximum associations to return, 1-200 (default 50)"
               }
             }
+
+            output_schema {
+              type        = "object"
+              description = "AD-004 envelope (contract_version 0.2): observations are recorded facts, interpretation is added explanation, limitations state what the answer can't support."
+
+              property {
+                name     = "contract_version"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "result_type"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "summary"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name        = "observations"
+                type        = "array"
+                description = "What a source record states, each with a refs array of evidence ids."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "interpretation"
+                type        = "array"
+                description = "Curator explanation, not an established fact. Each item carries basis and refs."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name     = "graph"
+                type     = "object"
+                required = true
+
+                property {
+                  name       = "nodes"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "edges"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+
+              property {
+                name        = "evidence"
+                type        = "array"
+                description = "Flat lookup table of citations; observations/interpretation refs point into this by id."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "query"
+                type        = "object"
+                description = "The openCypher query that ran, present when one did."
+
+                property {
+                  name = "language"
+                  type = "string"
+                }
+
+                property {
+                  name = "text"
+                  type = "string"
+                }
+
+                property {
+                  name = "parameters"
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "limitations"
+                type        = "array"
+                description = "What the answer can't support. Always pass these on."
+                required    = true
+
+                items {
+                  type = "string"
+                }
+              }
+
+              property {
+                name     = "trace"
+                type     = "object"
+                required = true
+
+                property {
+                  name = "request_id"
+                  type = "string"
+                }
+
+                property {
+                  name       = "plan"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "tool_calls"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+            }
           }
 
           inline_payload {
@@ -108,6 +366,135 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
                 type        = "string"
                 description = "MONDO identifier of the disease, e.g. MONDO:0009693"
                 required    = true
+              }
+            }
+
+            output_schema {
+              type        = "object"
+              description = "AD-004 envelope (contract_version 0.2): observations are recorded facts, interpretation is added explanation, limitations state what the answer can't support."
+
+              property {
+                name     = "contract_version"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "result_type"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "summary"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name        = "observations"
+                type        = "array"
+                description = "What a source record states, each with a refs array of evidence ids."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "interpretation"
+                type        = "array"
+                description = "Curator explanation, not an established fact. Each item carries basis and refs."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name     = "graph"
+                type     = "object"
+                required = true
+
+                property {
+                  name       = "nodes"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "edges"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+
+              property {
+                name        = "evidence"
+                type        = "array"
+                description = "Flat lookup table of citations; observations/interpretation refs point into this by id."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "query"
+                type        = "object"
+                description = "The openCypher query that ran, present when one did."
+
+                property {
+                  name = "language"
+                  type = "string"
+                }
+
+                property {
+                  name = "text"
+                  type = "string"
+                }
+
+                property {
+                  name = "parameters"
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "limitations"
+                type        = "array"
+                description = "What the answer can't support. Always pass these on."
+                required    = true
+
+                items {
+                  type = "string"
+                }
+              }
+
+              property {
+                name     = "trace"
+                type     = "object"
+                required = true
+
+                property {
+                  name = "request_id"
+                  type = "string"
+                }
+
+                property {
+                  name       = "plan"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "tool_calls"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
               }
             }
           }
@@ -131,6 +518,135 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
                 description = "Citation or knowledge source, e.g. PMID:34201396 or infores:orphanet"
               }
             }
+
+            output_schema {
+              type        = "object"
+              description = "AD-004 envelope (contract_version 0.2): observations are recorded facts, interpretation is added explanation, limitations state what the answer can't support."
+
+              property {
+                name     = "contract_version"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "result_type"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "summary"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name        = "observations"
+                type        = "array"
+                description = "What a source record states, each with a refs array of evidence ids."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "interpretation"
+                type        = "array"
+                description = "Curator explanation, not an established fact. Each item carries basis and refs."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name     = "graph"
+                type     = "object"
+                required = true
+
+                property {
+                  name       = "nodes"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "edges"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+
+              property {
+                name        = "evidence"
+                type        = "array"
+                description = "Flat lookup table of citations; observations/interpretation refs point into this by id."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "query"
+                type        = "object"
+                description = "The openCypher query that ran, present when one did."
+
+                property {
+                  name = "language"
+                  type = "string"
+                }
+
+                property {
+                  name = "text"
+                  type = "string"
+                }
+
+                property {
+                  name = "parameters"
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "limitations"
+                type        = "array"
+                description = "What the answer can't support. Always pass these on."
+                required    = true
+
+                items {
+                  type = "string"
+                }
+              }
+
+              property {
+                name     = "trace"
+                type     = "object"
+                required = true
+
+                property {
+                  name = "request_id"
+                  type = "string"
+                }
+
+                property {
+                  name       = "plan"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "tool_calls"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+            }
           }
 
           inline_payload {
@@ -151,6 +667,153 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
                 name        = "parameters"
                 type        = "object"
                 description = "Values for the $name placeholders in the query"
+              }
+            }
+
+            output_schema {
+              type        = "object"
+              description = "AD-004 envelope (contract_version 0.2, result_type \"table\"): observations are recorded facts, interpretation is added explanation, limitations state what the answer can't support."
+
+              property {
+                name     = "contract_version"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "result_type"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "summary"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name        = "observations"
+                type        = "array"
+                description = "What a source record states, each with a refs array of evidence ids."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "interpretation"
+                type        = "array"
+                description = "Curator explanation, not an established fact. Each item carries basis and refs."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name     = "graph"
+                type     = "object"
+                required = true
+
+                property {
+                  name       = "nodes"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "edges"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+
+              property {
+                name        = "evidence"
+                type        = "array"
+                description = "Flat lookup table of citations; observations/interpretation refs point into this by id."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "query"
+                type        = "object"
+                description = "The openCypher query that ran."
+
+                property {
+                  name = "language"
+                  type = "string"
+                }
+
+                property {
+                  name = "text"
+                  type = "string"
+                }
+
+                property {
+                  name = "parameters"
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "limitations"
+                type        = "array"
+                description = "What the answer can't support. Always pass these on."
+                required    = true
+
+                items {
+                  type = "string"
+                }
+              }
+
+              property {
+                name     = "trace"
+                type     = "object"
+                required = true
+
+                property {
+                  name = "request_id"
+                  type = "string"
+                }
+
+                property {
+                  name       = "plan"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "tool_calls"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+
+              property {
+                name        = "table"
+                type        = "object"
+                description = "Query result rows, present for result_type \"table\". columns is the list of RETURN aliases; each row is a list of cell values aligned to columns, in that order."
+
+                property {
+                  name       = "columns"
+                  type       = "array"
+                  items_json = jsonencode({ type = "string" })
+                }
+
+                property {
+                  name       = "rows"
+                  type       = "array"
+                  items_json = jsonencode({ type = "array" })
+                }
               }
             }
           }
