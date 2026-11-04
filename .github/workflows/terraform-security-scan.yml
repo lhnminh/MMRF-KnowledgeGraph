@@ -1,0 +1,38 @@
+name: Terraform Security Scan
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+  pull_request:
+    paths:
+      - "terraform/**"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  checkov:
+    name: Checkov IaC Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Checkov
+        id: checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform
+          framework: terraform
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+          soft_fail: true
+
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov-results.sarif
