@@ -191,6 +191,7 @@ Impact on other domains:
   third D-4 exception, approved by the lead; the other lead's review is owed. (2) The route is
   request/response, not streaming; the panel shows a working state until the answer arrives.
 - Region decided: `us-east-1` (work breakdown D-5). Bedrock model access, quotas and AgentCore usability in the account are confirmed in C-5.
+  **Correction recorded 2026-11-04:** the Workstream 1 stack (Neptune, the `kg-graph` and `kg-ingest` Lambdas, AgentCore Gateway) is deployed in `us-west-2`, the default in `terraform/variables.tf`, not `us-east-1`. The reason for the difference was not recorded. Callers in another region use the Gateway's URL and must sign requests for `us-west-2`.
 - Step 1 time-box decided: 2.5 hours with milestones M1 to M3 (AD-002, work breakdown D-1). Preparing and testing the Terraform before day 1 is permitted (story K-1.0). Open: whether other pre-day-1 preparation is permitted.
 
 ## 9. Review

@@ -119,6 +119,7 @@ Impact on other domains:
 
 - Exact model ID, quotas, one-time Anthropic use-case form and SCP-allowed inference profile type in the sandbox account (work breakdown C-5).
 - AgentCore availability in `us-east-1`: AWS documents Runtime, Gateway, Memory, Identity, built-in tools and Observability there; confirm in the sandbox account (C-5).
+- **Correction recorded 2026-11-04 to the region in decision item 4:** the Workstream 1 Gateway and its tools are deployed in `us-west-2`, not `us-east-1` (see AD-005). The orchestrator's region is not settled by this; an agent elsewhere signs its Gateway calls for `us-west-2`. Model and quota checks made for `us-east-1` have not been repeated for `us-west-2`.
 - Resolved 2026-11-02 (work breakdown D-6): the combined demo is a required deliverable. The
   orchestrator-calls-knowledge-tool-through-Gateway topology in this decision is therefore
   mandatory, not optional, and has defined degraded rungs (work breakdown section 12).

@@ -142,6 +142,8 @@ uv run python scripts/test_gateway.py
 
 Needs credentials for an identity the Gateway's AWS_IAM authorizer accepts. It reads the Gateway URL from `terraform -chdir=terraform output -raw gateway_url` by default, or pass `--gateway-url` to override.
 
+The tools, their arguments and the response format are described in [docs/mcp-tools.md](docs/mcp-tools.md).
+
 ## Tests
 
 ```sh
