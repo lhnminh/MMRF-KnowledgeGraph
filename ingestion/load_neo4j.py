@@ -55,9 +55,8 @@ def load_monarch(tx, monarch: dict, version: str) -> None:
             MERGE (o:{object_label} {{id: $object}})
             SET o.label = $object_label, o.category = $object_category,
                 o.source = 'monarch', o.source_version = $version{disease_name}
-            MERGE (d)-[r:ASSOCIATION {{predicate: $predicate}}]->(o)
-            SET r.source = 'monarch',
-                r.source_version = $version,
+            MERGE (d)-[r:ASSOCIATION {{predicate: $predicate, source: 'monarch'}}]->(o)
+            SET r.source_version = $version,
                 r.edge_origin = 'recorded',
                 r.primary_knowledge_source = $primary_knowledge_source,
                 r.publications = $publications
@@ -123,6 +122,38 @@ def load_dismech(tx, dismech: dict, version: str) -> None:
                 explanation=evidence.get("explanation"),
                 version=version,
             )
+
+    for phenotype in dismech.get("phenotypes", []):
+        term = phenotype["phenotype_term"]["term"]
+        evidence = (phenotype.get("evidence") or [{}])[0]
+        # The HP id joins this to any Monarch record of the same phenotype: one node, one edge per source.
+        tx.run(
+            """
+            MERGE (d:Disease {id: $disease_id})
+            MERGE (o:Entity {id: $object})
+            SET o.label = coalesce(o.label, $object_label),
+                o.category = coalesce(o.category, 'biolink:PhenotypicFeature'),
+                o.source = coalesce(o.source, 'dismech'),
+                o.source_version = coalesce(o.source_version, $version)
+            MERGE (d)-[r:ASSOCIATION {predicate: 'biolink:has_phenotype', source: 'dismech'}]->(o)
+            SET r.source_version = $version,
+                r.edge_origin = 'recorded',
+                r.frequency = $frequency,
+                r.description = $description,
+                r.evidence_pmid = $pmid,
+                r.evidence_snippet = $snippet,
+                r.dismech_explanation = $explanation
+            """,
+            disease_id=disease_id,
+            object=term["id"],
+            object_label=term["label"],
+            frequency=phenotype.get("frequency"),
+            description=phenotype.get("description"),
+            pmid=evidence.get("reference"),
+            snippet=evidence.get("snippet"),
+            explanation=evidence.get("explanation"),
+            version=version,
+        )
 
 
 def load_graph(driver, monarch_text: str, dismech_text: str, provenance_text: str) -> dict:

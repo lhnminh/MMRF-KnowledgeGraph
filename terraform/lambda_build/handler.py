@@ -51,6 +51,7 @@ QUERY_MAX_HOPS = 5
 # Default dataset by node label, used when the node itself has no `source` property.
 # Disease nodes are merged from both Monarch and DisMech, so they get no default.
 LABEL_DATASET = {"Entity": "monarch", "Mechanism": "dismech"}
+DATASET_NAMES = {"monarch": "Monarch", "dismech": "DisMech"}
 
 _driver = None
 _driver_created_at = 0.0
@@ -207,8 +208,7 @@ def mechanism_id(name):
     return f"dismech:mechanism:{name}"
 
 
-def edge_id(kind, subject, predicate, obj):
-    dataset = "monarch" if kind == "association" else "dismech"
+def edge_id(dataset, subject, predicate, obj):
     return f"{dataset}:{subject}|{predicate}|{obj}"
 
 
@@ -216,8 +216,8 @@ def parse_edge_id(value):
     match = re.fullmatch(r"(monarch|dismech):([^|]+)\|([^|]+)\|([^|]+)", value or "")
     if not match:
         raise ToolInputError(
-            "edge_id must look like 'monarch:<subject>|<predicate>|<object>' or "
-            "'dismech:<mechanism>|leads_to|<mechanism>', as returned in graph.edges[].id"
+            "edge_id must look like '<monarch or dismech>:<subject>|<predicate>|<object>', "
+            "as returned in graph.edges[].id"
         )
     return match.groups()
 
@@ -228,10 +228,10 @@ def parse_edge_id(value):
 ASSOCIATION_COLUMNS = """
     'association' AS kind, d.id AS subject_id, d.name AS subject_label, 'Disease' AS subject_type,
     null AS subject_description, r.predicate AS predicate,
-    o.id AS object_id, o.label AS object_label, o.category AS object_type, null AS object_description,
-    null AS pmid, null AS snippet, null AS explanation,
+    o.id AS object_id, o.label AS object_label, o.category AS object_type, r.description AS object_description,
+    r.evidence_pmid AS pmid, r.evidence_snippet AS snippet, r.dismech_explanation AS explanation,
     r.publications AS publications, r.primary_knowledge_source AS primary_knowledge_source,
-    r.source AS source, r.source_version AS source_version, r.edge_origin AS edge_origin
+    r.frequency AS frequency, r.source AS source, r.source_version AS source_version, r.edge_origin AS edge_origin
 """
 
 LEADS_TO_COLUMNS = """
@@ -240,7 +240,7 @@ LEADS_TO_COLUMNS = """
     b.name AS object_id, b.name AS object_label, 'Mechanism' AS object_type, b.description AS object_description,
     r.evidence_pmid AS pmid, r.evidence_snippet AS snippet, r.dismech_explanation AS explanation,
     null AS publications, null AS primary_knowledge_source,
-    r.source AS source, r.source_version AS source_version, r.edge_origin AS edge_origin
+    null AS frequency, r.source AS source, r.source_version AS source_version, r.edge_origin AS edge_origin
 """
 
 HAS_MECHANISM_COLUMNS = """
@@ -249,7 +249,7 @@ HAS_MECHANISM_COLUMNS = """
     a.name AS object_id, a.name AS object_label, 'Mechanism' AS object_type, a.description AS object_description,
     h.evidence_pmid AS pmid, h.evidence_snippet AS snippet, h.dismech_explanation AS explanation,
     null AS publications, null AS primary_knowledge_source,
-    h.source AS source, h.source_version AS source_version, h.edge_origin AS edge_origin
+    null AS frequency, h.source AS source, h.source_version AS source_version, h.edge_origin AS edge_origin
 """
 
 
@@ -273,12 +273,12 @@ def add_edge_row(env, row):
 
     subject, obj = node_ref("subject"), node_ref("object")
     predicate = row["predicate"]
-    eid = edge_id(kind, row["subject_id"], predicate, row["object_id"])
+    eid = edge_id(dataset, row["subject_id"], predicate, row["object_id"])
     if eid in env.edges:
         return eid
 
     evidence_ids = []
-    if kind in ("leads_to", "has_mechanism") and row["pmid"]:
+    if row["pmid"]:
         evidence_ids.append(env.add_evidence(f"{eid}#{row['pmid']}", row["pmid"], dataset, version, row["snippet"]))
     elif kind == "association":
         references = _as_list(row["publications"]) or _as_list(row["primary_knowledge_source"])
@@ -324,11 +324,25 @@ def add_edge_row(env, row):
                 "refs": evidence_ids,
             })
     else:
+        source_name = DATASET_NAMES.get(dataset, dataset)
+        frequency = f" Frequency: {row['frequency'].replace('_', ' ').lower()}." if row["frequency"] else ""
         env.observations.append({
-            "text": f"{dataset.capitalize()} records: {row['subject_label']} {_humanize(predicate)} "
-                    f"{row['object_label']} ({row['object_id']}).",
+            "text": f"{source_name} records: {row['subject_label']} {_humanize(predicate)} "
+                    f"{row['object_label']} ({row['object_id']}).{frequency}",
             "refs": evidence_ids,
         })
+        if row["object_description"]:
+            env.observations.append({
+                "text": f"{source_name} describes {row['object_label']} in {row['subject_label']}: "
+                        f"{row['object_description']}",
+                "refs": evidence_ids,
+            })
+        if row["explanation"]:
+            env.interpretation.append({
+                "text": row["explanation"],
+                "basis": "source_curator_commentary",
+                "refs": evidence_ids,
+            })
 
     if not evidence_ids:
         env._edges_without_evidence.append(eid)
@@ -417,17 +431,20 @@ def get_phenotypes(session, args, env):
         MATCH (d:Disease {{id: $disease_id}})-[r:ASSOCIATION]->(o:Entity)
         WHERE r.predicate = 'biolink:has_phenotype'
         RETURN {ASSOCIATION_COLUMNS}
-        ORDER BY object_label
+        ORDER BY object_label, source DESC
         LIMIT {limit + 1}
     """
     parameters = {"disease_id": disease_id}
     env.set_query(query, parameters)
     rows = _read(session, query, parameters)
+    shown = rows[:limit]
 
-    for row in rows[:limit]:
+    for row in shown:
         add_edge_row(env, row)
 
-    env.limit("Phenotypes come from Monarch only; DisMech phenotype records are not loaded into the graph.")
+    env.limit("A phenotype recorded by both Monarch and DisMech is one node with one edge per source.")
+    env.limit("A recorded phenotype does not say how the disease causes it: no edge in the graph links a "
+              "phenotype to a mechanism.")
     if len(rows) > limit:
         env.limit(f"More than {limit} phenotype associations are recorded; only the first {limit} are returned.")
     if not rows:
@@ -438,9 +455,10 @@ def get_phenotypes(session, args, env):
         )
         return env.build("graph", f"No phenotypes recorded for {disease_id}.")
 
-    count = min(len(rows), limit)
-    return env.build("graph", f"{count} phenotype associations recorded in Monarch for "
-                              f"{rows[0]['subject_label']} ({disease_id}).")
+    dismech_count = sum(1 for row in shown if row["source"] == "dismech")
+    return env.build("graph", f"{len(shown)} phenotype associations recorded for {rows[0]['subject_label']} "
+                              f"({disease_id}): {len(shown) - dismech_count} from Monarch, "
+                              f"{dismech_count} from DisMech.")
 
 
 def get_mechanism_paths(session, args, env):
@@ -490,18 +508,24 @@ def get_evidence(session, args, env):
 
     if edge:
         dataset, subject, predicate, obj = parse_edge_id(edge)
-        if dataset == "dismech":
+        if predicate == "leads_to":
             query = f"""
                 MATCH (a:Mechanism {{name: $subject}})-[r:LEADS_TO]->(b:Mechanism {{name: $object}})
                 RETURN {LEADS_TO_COLUMNS}
             """
             parameters = {"subject": subject, "object": obj}
+        elif predicate == "has_mechanism":
+            query = f"""
+                MATCH (d:Disease {{id: $subject}})-[h:HAS_MECHANISM]->(a:Mechanism {{name: $object}})
+                RETURN {HAS_MECHANISM_COLUMNS}
+            """
+            parameters = {"subject": subject, "object": obj}
         else:
             query = f"""
-                MATCH (d:Disease {{id: $subject}})-[r:ASSOCIATION {{predicate: $predicate}}]->(o {{id: $object}})
+                MATCH (d:Disease {{id: $subject}})-[r:ASSOCIATION {{predicate: $predicate, source: $dataset}}]->(o {{id: $object}})
                 RETURN {ASSOCIATION_COLUMNS}
             """
-            parameters = {"subject": subject, "predicate": predicate, "object": obj}
+            parameters = {"subject": subject, "predicate": predicate, "object": obj, "dataset": dataset}
         env.set_query(query, parameters)
         rows = _read(session, query, parameters)
         for row in rows:
@@ -519,15 +543,19 @@ def get_evidence(session, args, env):
         WHERE r.evidence_pmid = $reference
         RETURN {LEADS_TO_COLUMNS}
         UNION ALL
+        MATCH (d:Disease)-[h:HAS_MECHANISM]->(a:Mechanism)
+        WHERE h.evidence_pmid = $reference
+        RETURN {HAS_MECHANISM_COLUMNS}
+        UNION ALL
         MATCH (d:Disease)-[r:ASSOCIATION]->(o)
-        WHERE r.primary_knowledge_source = $reference OR r.publications IS NOT NULL
+        WHERE r.evidence_pmid = $reference OR r.primary_knowledge_source = $reference OR r.publications IS NOT NULL
         RETURN {ASSOCIATION_COLUMNS}
     """
     parameters = {"reference": reference}
     env.set_query(query, parameters)
     rows = [
         row for row in _read(session, query, parameters)
-        if row["kind"] == "leads_to"
+        if row["pmid"] == reference
         or row["primary_knowledge_source"] == reference
         or reference in _as_list(row["publications"])
     ]

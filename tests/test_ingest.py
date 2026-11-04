@@ -47,6 +47,12 @@ pathophysiology:
       - target: B
         evidence: [{reference: "PMID:3", snippet: quoted, explanation: commentary}]
   - name: B
+phenotypes:
+  - name: Anemia
+    frequency: VERY_FREQUENT
+    description: low red cells
+    evidence: [{reference: "PMID:4", snippet: quoted phenotype, explanation: phenotype commentary}]
+    phenotype_term: {term: {id: "HP:0001903", label: Anemia}}
 """
 PROVENANCE = json.dumps({"source_revision": "b1ca0b2"})
 
@@ -109,10 +115,25 @@ def test_every_edge_records_its_source_version_and_origin():
     loader.load_monarch(tx, MONARCH, "2026-10-07")
     loader.load_dismech(tx, loader.yaml.safe_load(DISMECH_YAML), "b1ca0b2")
     edge_writes = [(q, p) for q, p in tx.calls if "]->(" in q]
-    assert len(edge_writes) == 5  # two associations, two mechanisms, one causal edge
+    assert len(edge_writes) == 6  # two associations, two mechanisms, one causal edge, one phenotype
     for query, parameters in edge_writes:
         assert "source_version = $version" in query and "edge_origin = 'recorded'" in query
         assert parameters["version"] in {"2026-10-07", "b1ca0b2"}
+
+
+def test_monarch_and_dismech_keep_separate_edges_to_one_phenotype_node():
+    tx = FakeTx()
+    loader.load_monarch(tx, MONARCH, "2026-10-07")
+    loader.load_dismech(tx, loader.yaml.safe_load(DISMECH_YAML), "b1ca0b2")
+    monarch_query = association_call(tx, "biolink:has_phenotype")[0]
+    dismech_query, parameters = next((q, p) for q, p in tx.calls if p.get("object") == "HP:0001903")
+    assert "{predicate: $predicate, source: 'monarch'}" in monarch_query
+    assert "{predicate: 'biolink:has_phenotype', source: 'dismech'}" in dismech_query
+    assert "MERGE (o:Entity {id: $object})" in dismech_query
+    # A phenotype already loaded from Monarch keeps its stored provenance.
+    assert "o.source = coalesce(o.source, 'dismech')" in dismech_query
+    assert parameters["pmid"] == "PMID:4" and parameters["snippet"] == "quoted phenotype"
+    assert parameters["frequency"] == "VERY_FREQUENT"
 
 
 def test_parameters_are_neptune_safe():

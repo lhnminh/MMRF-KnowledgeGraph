@@ -8,11 +8,12 @@ Citations are stored as plain properties on the relationship they support, not a
 
 | Relationship | Properties | Set by |
 | --- | --- | --- |
-| `(:Disease)-[:ASSOCIATION]->(:Entity\|:Disease)` | `publications`, `primary_knowledge_source` | `load_monarch` in `ingestion/load_neo4j.py` |
+| `(:Disease)-[:ASSOCIATION {source: 'monarch'}]->(:Entity\|:Disease)` | `publications`, `primary_knowledge_source` | `load_monarch` in `ingestion/load_neo4j.py` |
+| `(:Disease)-[:ASSOCIATION {source: 'dismech'}]->(:Entity)` | `evidence_pmid`, `evidence_snippet`, `dismech_explanation` | `load_dismech`, from the phenotype's own `evidence[0]` |
 | `(:Disease)-[:HAS_MECHANISM]->(:Mechanism)` | `evidence_pmid`, `evidence_snippet`, `dismech_explanation` | `load_dismech`, from the step's own `evidence[0]` |
 | `(:Mechanism)-[:LEADS_TO]->(:Mechanism)` | `evidence_pmid`, `evidence_snippet`, `dismech_explanation` | `load_dismech`, from that `downstream[].evidence[0]` |
 
-Both DisMech relationship types pull from the same shape in the raw YAML (`evidence: [{reference, snippet, explanation}]`) — a mechanism's own evidence for `HAS_MECHANISM`, a causal edge's evidence for `LEADS_TO`. Only the first evidence item is loaded for either; this is reported as a limitation (section 4).
+All DisMech relationships pull from the same shape in the raw YAML (`evidence: [{reference, snippet, explanation}]`) — a phenotype's own evidence for `ASSOCIATION`, a mechanism's own evidence for `HAS_MECHANISM`, a causal edge's evidence for `LEADS_TO`. Only the first evidence item is loaded for any of them. `kg_get_mechanism_paths` reports this as a limitation for causal edges; today every DisMech phenotype and causal edge has only one item, so only Immune Dysregulation's second citation is left out.
 
 ## 2. Neptune property → evidence id
 
@@ -20,8 +21,8 @@ Both DisMech relationship types pull from the same shape in the raw YAML (`evide
 
 `add_edge_row` turns each row's citation fields into one or more evidence ids, deduplicated by id in `Envelope.add_evidence`:
 
-- `association` rows: one evidence id per entry in `publications` (or `primary_knowledge_source` if `publications` is empty), e.g. `monarch:MONDO:0009693|biolink:has_phenotype|HP:0004341#infores:orphanet`.
-- `has_mechanism` / `leads_to` rows: one evidence id from `pmid`, if present, e.g. `dismech:Clonal Plasma Cell Proliferation|leads_to|Bone Marrow Failure#PMID:34201396`.
+- Rows with a `pmid` (all DisMech rows): one evidence id, e.g. `dismech:Clonal Plasma Cell Proliferation|leads_to|Bone Marrow Failure#PMID:34201396`.
+- Other `association` rows (Monarch): one evidence id per entry in `publications` (or `primary_knowledge_source` if `publications` is empty), e.g. `monarch:MONDO:0009693|biolink:has_phenotype|HP:0004341#infores:orphanet`.
 
 Each id is registered once in `env.evidence` as `{id, reference, snippet, source_dataset, source_version}`.
 
