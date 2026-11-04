@@ -1,0 +1,10 @@
+{
+  "sandbox": {
+    "url": "https://github.com/theMMRF/mmrf-virtual-lab-sandbox.git",
+    "commit": "2e47ab88baf57c2b8af1c388b6b48fca93ea5ac5"
+  },
+  "frontend": {
+    "url": "https://github.com/theMMRF/mmrf-data-commons.git",
+    "commit": "27cf09aca01a496b9d52f1b6a14e6859bf530fbb"
+  }
+}
