@@ -91,7 +91,7 @@ relationships alongside source version, retrieval time, license and hashes.
 
 ## AWS
 
-Everything runs in **us-west-2** from one Terraform stack in `terraform/`: a private VPC with no NAT or internet gateway, Neptune (`mmrf-kg-cluster`), AgentCore Gateway and its logs, and two Lambdas:
+The core runs in **us-west-2** from the Terraform stack in `terraform/`: a private VPC with no NAT or internet gateway, Neptune (`mmrf-kg-cluster`), AgentCore Gateway and its logs, and two Lambdas:
 
 | Lambda | Job | Neptune access |
 | --- | --- | --- |
@@ -99,6 +99,11 @@ Everything runs in **us-west-2** from one Terraform stack in `terraform/`: a pri
 | `mmrf-kg-ingest` | Reads the raw source files from S3 and writes them to Neptune | Read and write |
 
 Nothing outside the VPC connects to Neptune directly.
+
+For an interactive graph page and a token-protected JSON API, see
+[Graph API and explorer](docs/graph-api.md). It deploys independently from
+`terraform/graph-api`, invokes the existing read-only graph Lambda, and supports
+source, entity-type, relationship, and text filters with citation links.
 
 ### Deploy
 

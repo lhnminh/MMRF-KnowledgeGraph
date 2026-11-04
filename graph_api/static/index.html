@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ORION · Myeloma graph explorer</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script defer src="/assets/cytoscape.min.js"></script>
+  <script defer src="/assets/app.js"></script>
+</head>
+<body>
+  <header>
+    <div><div class="eyebrow">ORION / KNOWLEDGE GRAPH</div><h1>Explore Multiple Myeloma</h1>
+    <p>Follow the recorded relationships. Inspect the evidence behind each connection.</p></div>
+    <span class="badge">AWS Neptune · sandbox</span>
+  </header>
+  <form id="connect-form" class="connection">
+    <label for="token">Graph access token</label>
+    <input id="token" type="password" autocomplete="off" placeholder="Paste your sandbox access token" required>
+    <button id="connect" type="submit">Connect</button>
+    <button id="disconnect" type="button" hidden>Disconnect</button>
+    <span id="connection-status">The token stays in this page’s memory.</span>
+  </form>
+  <main>
+    <section class="workspace">
+      <form id="filters" class="filters">
+        <label>View<select id="view"><option value="clinical">Bone, kidney, calcium &amp; anemia</option><option value="all">All recorded relationships</option><option value="phenotypes">Phenotypes</option><option value="mechanisms">Mechanisms</option><option value="genetics">Genetic factors</option><option value="treatments">Recorded treatments &amp; drugs</option></select></label>
+        <label>Source<select id="source"><option value="">All sources</option></select></label>
+        <label>Entity type<select id="entity_type"><option value="">All types</option></select></label>
+        <label>Relationship<select id="predicate"><option value="">All relationships</option></select></label>
+        <label class="search-label">Find a node<input id="q" type="search" placeholder="e.g. TP53, anemia, bone"></label>
+        <button id="reset" type="button">Reset filters</button>
+      </form>
+      <div class="graph-toolbar"><span id="counts">Connect to explore the graph</span><div><button id="refresh" type="button">Refresh</button><button id="fit" type="button">Fit</button><button id="labels" type="button" aria-pressed="false">Edge labels</button><button id="download" type="button">Download JSON</button></div></div>
+      <div class="graph-wrap"><div id="graph" aria-label="Interactive graph. Use the node list below to inspect records with a keyboard."></div><div id="overlay" class="overlay" role="status" aria-live="polite">Connect with your sandbox token to load live Neptune data.</div><div class="hint">Scroll to zoom · Drag to pan · Select a node or arrow for evidence</div></div>
+      <div class="legend"><span><i class="disease"></i>Disease</span><span><i class="phenotype"></i>Phenotype</span><span><i class="mechanism"></i>Mechanism</span><span><i class="gene"></i>Genetic factor</span><span><i class="drug"></i>Treatment / drug</span></div>
+      <details class="node-list"><summary>Browse visible nodes with a keyboard</summary><div id="node-list"></div></details>
+    </section>
+    <aside><section id="details"><h2>Every connection has a source</h2><p>Select a node or relationship to see its identifiers, source versions, and recorded references.</p><p>The graph shows loaded public biological knowledge. A missing relationship means none is recorded in this returned subset.</p></section><details id="limits"><summary>Scope &amp; data limitations</summary><ul id="limitations"></ul></details></aside>
+  </main>
+  <footer>Research prototype · Source-reported relationships retain their direction. Recorded treatments are not clinical recommendations. No patient or synthetic cohort records are shown. <a href="/assets/CYTOSCAPE-LICENSE.txt" target="_blank" rel="noopener">Cytoscape.js license</a></footer>
+</body>
+</html>
