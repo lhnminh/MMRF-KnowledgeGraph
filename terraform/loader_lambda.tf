@@ -4,6 +4,7 @@ resource "aws_security_group" "loader_lambda" {
   vpc_id      = aws_vpc.kg.id
 
   egress {
+    description = "Outbound within the private VPC (Neptune)"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -53,12 +54,17 @@ resource "aws_cloudwatch_log_group" "loader_lambda" {
 }
 
 resource "aws_lambda_function" "loader" {
-  function_name = "${var.name}-kg-graph"
-  role          = aws_iam_role.loader_lambda.arn
-  handler       = "handler.handler"
-  runtime       = "python3.12"
-  timeout       = 60
-  memory_size   = 256
+  function_name                  = "${var.name}-kg-graph"
+  role                           = aws_iam_role.loader_lambda.arn
+  handler                        = "handler.handler"
+  runtime                        = "python3.12"
+  timeout                        = 60
+  memory_size                    = 256
+  reserved_concurrent_executions = 10
+
+  tracing_config {
+    mode = "Active"
+  }
 
   filename         = "${path.module}/lambda_loader.zip"
   source_code_hash = filebase64sha256("${path.module}/lambda_loader.zip")

@@ -7,6 +7,11 @@ resource "aws_vpc" "kg" {
   tags = { Name = "${var.name}-private-vpc" }
 }
 
+# The default SG is unused (every resource here gets its own SG); lock it down to no rules.
+resource "aws_default_security_group" "kg" {
+  vpc_id = aws_vpc.kg.id
+}
+
 resource "aws_subnet" "kg_private" {
   count             = 2
   vpc_id            = aws_vpc.kg.id
@@ -108,6 +113,8 @@ resource "aws_neptune_cluster" "this" {
   apply_immediately                    = true
   iam_database_authentication_enabled  = false
   enable_cloudwatch_logs_exports       = ["audit"]
+  copy_tags_to_snapshot                = true
+  backup_retention_period              = 7
   # Protects against an accidental destroy or a Terraform change that forces replacement
   # (see the storage_encrypted comment below); scripts/teardown.sh must disable this first.
   deletion_protection = true

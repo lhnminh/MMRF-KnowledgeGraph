@@ -26,6 +26,25 @@ resource "aws_s3_bucket_public_access_block" "ingest" {
   restrict_public_buckets = true
 }
 
+resource "aws_s3_bucket_versioning" "ingest" {
+  bucket = aws_s3_bucket.ingest.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# Source files are re-fetched from upstream, not archived; old versions just cost storage.
+resource "aws_s3_bucket_lifecycle_configuration" "ingest" {
+  bucket = aws_s3_bucket.ingest.id
+  rule {
+    id     = "expire-old-versions"
+    status = "Enabled"
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+}
+
 # The VPC has no internet route, so this is how the Lambda reaches S3. Gateway endpoints are free.
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.kg.id
@@ -56,6 +75,7 @@ resource "aws_security_group" "ingest_lambda" {
 resource "aws_vpc_security_group_egress_rule" "ingest_neptune" {
   security_group_id            = aws_security_group.ingest_lambda.id
   referenced_security_group_id = aws_security_group.neptune.id
+  description                  = "Neptune openCypher"
   ip_protocol                  = "tcp"
   from_port                    = 8182
   to_port                      = 8182
@@ -64,6 +84,7 @@ resource "aws_vpc_security_group_egress_rule" "ingest_neptune" {
 resource "aws_vpc_security_group_egress_rule" "ingest_s3" {
   security_group_id = aws_security_group.ingest_lambda.id
   prefix_list_id    = aws_vpc_endpoint.s3.prefix_list_id
+  description       = "S3 gateway endpoint"
   ip_protocol       = "tcp"
   from_port         = 443
   to_port           = 443
@@ -124,12 +145,17 @@ resource "aws_cloudwatch_log_group" "ingest_lambda" {
 }
 
 resource "aws_lambda_function" "ingest" {
-  function_name = "${var.name}-ingest"
-  role          = aws_iam_role.ingest_lambda.arn
-  handler       = "load_neo4j.lambda_handler"
-  runtime       = "python3.12"
-  timeout       = 300
-  memory_size   = 256
+  function_name                  = "${var.name}-ingest"
+  role                           = aws_iam_role.ingest_lambda.arn
+  handler                        = "load_neo4j.lambda_handler"
+  runtime                        = "python3.12"
+  timeout                        = 300
+  memory_size                    = 256
+  reserved_concurrent_executions = 1
+
+  tracing_config {
+    mode = "Active"
+  }
 
   # The same package as kg-graph; scripts/build_lambda.py builds it.
   filename         = "${path.module}/lambda_loader.zip"
