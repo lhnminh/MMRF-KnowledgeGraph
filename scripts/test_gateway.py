@@ -18,14 +18,21 @@ TOOL_PREFIX = "kg-graph___"
 TIMEOUT_SECONDS = 70  # just above the kg-graph Lambda's 60 second limit
 
 DISEASE_ID = "MONDO:0009693"
-TOOLS = {"kg_search_entities", "kg_get_phenotypes", "kg_get_mechanism_paths", "kg_get_evidence", "kg_run_readonly_query"}
+TOOLS = {
+    "kg_search_entities", "kg_get_phenotypes", "kg_get_mechanism_paths", "kg_get_evidence",
+    "kg_get_gene_context", "kg_get_gene_disease_association", "kg_get_treatment_evidence", "kg_run_readonly_query",
+}
 CONTRACT_VERSION = "0.2"
 # What the current load should produce. Update these and docs/mcp-tools.md when the loaded data changes.
-NODES = 74
-RELATIONSHIPS = 87
+NODES = 111
+RELATIONSHIPS = 138
 PHENOTYPE_EDGES = 43
 MECHANISMS = 8
 CAUSAL_EDGES = 7
+# The JMML slice: the KRAS-JMML hand-off from Monarch to DisMech, and trametinib's link to the mechanism.
+JMML_ID = "MONDO:0011908"
+KRAS_ID = "HGNC:6407"
+TRAMETINIB_PMID = "PMID:38867349"
 # Matches nothing, so it does no harm even if the read-only guard ever failed to reject it.
 WRITE_ATTEMPT = "MATCH (n:SmokeTestNoSuchLabel) DETACH DELETE n RETURN 1"
 
@@ -150,6 +157,22 @@ def check_mechanisms_and_evidence(client) -> str:
     return f"{MECHANISMS} mechanisms, {CAUSAL_EDGES} causal edges, evidence returned"
 
 
+def check_jmml_path(client) -> str:
+    association = client.call_tool("kg_get_gene_disease_association", gene="KRAS", disease_id=JMML_ID)
+    _usable(association, "graph")
+    monarch = [e for e in association["graph"]["edges"] if e["source_dataset"] == "monarch" and e["target"] == JMML_ID]
+    if not monarch or monarch[0]["source"] != KRAS_ID:
+        raise CallFailed(f"no Monarch {KRAS_ID} -> {JMML_ID} association: {association['summary']}")
+
+    treatment = client.call_tool("kg_get_treatment_evidence", disease_id=JMML_ID, treatment="trametinib")
+    _usable(treatment, "graph")
+    if not any(e["predicate"] == "targets_mechanism" for e in treatment["graph"]["edges"]):
+        raise CallFailed(f"trametinib is not linked to a mechanism: {treatment['summary']}")
+    if TRAMETINIB_PMID not in {item["reference"] for item in treatment["evidence"]}:
+        raise CallFailed(f"{TRAMETINIB_PMID} is not cited for trametinib")
+    return f"{KRAS_ID} -> {JMML_ID}, trametinib -> mechanism with {TRAMETINIB_PMID}"
+
+
 def check_writes_are_rejected(client) -> str:
     envelope = client.call_tool("kg_run_readonly_query", query=WRITE_ATTEMPT)
     if envelope.get("result_type") != "text" or "rejected" not in (envelope.get("summary") or ""):
@@ -163,6 +186,7 @@ CHECKS = [
     ("search finds the disease", check_search),
     ("phenotypes are returned", check_phenotypes),
     ("mechanisms and evidence are returned", check_mechanisms_and_evidence),
+    ("JMML gene, mechanism and treatment links are returned", check_jmml_path),
     ("write queries are rejected", check_writes_are_rejected),
 ]
 

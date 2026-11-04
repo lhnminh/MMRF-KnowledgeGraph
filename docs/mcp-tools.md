@@ -1,6 +1,6 @@
 # Knowledge graph MCP tools
 
-For agents that use the multiple myeloma knowledge graph. There are five read-only tools behind one AgentCore Gateway. The envelope they return is defined in [AD-004](adrs/0004-integration-seam-tool-contract-and-response-types.md).
+For agents that use the multiple myeloma knowledge graph. There are eight read-only tools behind one AgentCore Gateway. The envelope they return is defined in [AD-004](adrs/0004-integration-seam-tool-contract-and-response-types.md).
 
 ## Connect
 
@@ -29,6 +29,9 @@ Over MCP, every name has the target prefix: `kg-graph___kg_search_entities`, and
 | `kg_get_phenotypes` | List the phenotypes recorded for a disease (Monarch and DisMech). A phenotype in both has one edge per source. | `disease_id` (required), such as `MONDO:0009693`. `limit`: 1-200, default 50. |
 | `kg_get_mechanism_paths` | Get DisMech mechanisms and the causal edges between them, with evidence. | `disease_id` (required). |
 | `kg_get_evidence` | Look up the evidence for one edge, or every edge citing a reference. | Exactly one of `edge_id` (from `graph.edges[].id`) or `reference` (such as `PMID:34201396` or `infores:orphanet`). |
+| `kg_get_gene_context` | See everything recorded about one human gene, per source: Monarch gene-disease associations, DisMech genetic factors and the subtypes the gene defines. Says "none recorded" for each loaded source with nothing. | `gene` (required): an HGNC id such as `HGNC:6407` or an approved symbol such as `KRAS`. `limit`: 1-200, default 50. |
+| `kg_get_gene_disease_association` | Get the link between one gene and one disease from each source: the Monarch association (relationship, knowledge source, disease id), the DisMech genetic factor and the subtype the gene defines. With a `variant`, says whether anything exists at that specificity. | `gene` and `disease_id` (both required). `variant`: optional, such as `KRAS G12D`. |
+| `kg_get_treatment_evidence` | Get a disease's recorded treatments with their agents, the mechanism each acts on (with that link's evidence and the mechanism's place in the disease record), and the cited evidence text. Lists treatments with no mechanism link and agents with no recorded target. | `disease_id` (required). `treatment`, `mechanism`: optional name filters, such as `trametinib` or `RAS/MAPK`. |
 | `kg_run_readonly_query` | Ask something no named tool covers. Use this last. | `query` (required): one openCypher read. `parameters`: values for `$name` placeholders. |
 
 ### Limits on `kg_run_readonly_query`
@@ -77,16 +80,19 @@ Every tool declares an `outputSchema` matching this shape, so a client that nego
 
 ## What the graph contains
 
-74 nodes and 87 relationships for multiple myeloma:
+111 nodes and 138 relationships for multiple myeloma (MM) and juvenile myelomonocytic leukemia (JMML, `MONDO:0011908`):
 
 | Source | Version | Provides |
 | --- | --- | --- |
-| Monarch KG | `2026-10-07` | 43 associations: phenotypes, related diseases and others |
-| DisMech | `v0.1.46` (commit `b1ca0b232b815a21b4ba95a62828c9979e9a49e7`) | 8 mechanisms, 7 causal edges, 9 phenotypes, 3 genetic factors, and 6 treatments with 11 named drugs |
+| Monarch KG | `2026-10-07` | MM: 43 associations (phenotypes, related diseases and others). JMML: 5, including the gene-level KRAS association (`HGNC:6407`, Orphanet) |
+| DisMech | `v0.1.46` (commit `b1ca0b232b815a21b4ba95a62828c9979e9a49e7`) | MM: 8 mechanisms, 7 causal edges, 9 phenotypes, 3 genetic factors, and 6 treatments with 11 named drugs. JMML: 5 mechanisms, 5 subtypes with their driver genes, 7 genetic factors, 3 treatments each linked to a mechanism |
 
 ```text
 (:Disease {id, name})-[:ASSOCIATION {predicate, source, source_version, edge_origin, primary_knowledge_source, publications, record_name, frequency, association_type, ontology_term, therapeutic_modality, description, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Entity or :Disease {id, label, category})
 (:Entity {category: 'biolink:Treatment'})-[:HAS_AGENT {source, source_version, edge_origin}]->(:Entity {category: 'biolink:Drug'})
+(:Entity {category: 'biolink:Gene'})-[:ASSOCIATION {predicate, source: 'monarch', ...}]->(:Disease)   // Monarch gene-disease: the gene is the subject
+(:Entity {subtype})-[:HAS_DRIVER_GENE {source, source_version, edge_origin, association_type}]->(:Entity {gene})
+(:Entity {treatment})-[:TARGETS_MECHANISM {source, source_version, edge_origin, treatment_effect, description, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Mechanism)
 (:Disease)-[:HAS_MECHANISM {source, source_version, edge_origin, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Mechanism {name, description, source, source_version})
 (:Mechanism)-[:LEADS_TO {source, source_version, edge_origin, evidence_pmid, evidence_snippet, dismech_explanation}]->(:Mechanism)
 ```
@@ -95,11 +101,20 @@ On `ASSOCIATION`, Monarch edges use `primary_knowledge_source` and `publications
 
 **Not available yet:**
 
-- Open Targets and CIViC data, so there are no target or variant answers. Genes and drugs are limited to DisMech's records: `TP53` and `IGH`, and 11 named drugs.
-- A named tool that lists genes or treatments. Use `kg_search_entities`, `kg_get_evidence` or `kg_run_readonly_query`; see the example below.
-- `kg_get_gene_context`, which AD-004 plans.
+- Open Targets and CIViC data, so there are no target or variant answers. Genes and drugs are limited to what Monarch and DisMech record for the two loaded diseases.
+- Variant-level records. Associations are at gene level, so `kg_get_gene_disease_association` reports a requested variant as a change in specificity.
+- A molecular target for a drug. DisMech names targets such as MEK1/2 only in descriptions, which are text rather than edges, so the tools report "no molecular target recorded".
+- Trial results as structured data. Population and response appear only in the quoted evidence snippet.
+- Only the loaded diseases are covered. Anything else is "none recorded" until it is loaded (`ingestion/fetch_*.py`, then the `sources` argument of `kg-ingest`).
+- JMML mechanism nodes that are really phenotypes. Seven `Mechanism` nodes (such as Anemia and Splenomegaly) exist only because a JMML mechanism lists them as a downstream step, and they have no source or description.
 - DisMech's cell types, biological processes and locations for each mechanism.
 - Links between phenotypes and mechanisms. Anemia, for example, is a phenotype with no edge from Bone Marrow Failure. `kg_get_mechanism_paths` lists every step its mechanism descriptions state without an edge in `limitations`, beginning `Not a recorded edge:`.
+
+## Example: from a gene to a drug in JMML
+
+1. `kg_get_gene_disease_association` with `{"gene": "KRAS", "disease_id": "MONDO:0011908", "variant": "KRAS G12D"}` returns the Monarch association between `HGNC:6407` and JMML (relationship `gene_associated_with_condition`, source `infores:orphanet`) and DisMech's KRAS-mutated subtype. `limitations` says the record is at gene level, not specific to the variant.
+2. `kg_get_mechanism_paths` with `{"disease_id": "MONDO:0011908"}` returns the DisMech JMML mechanisms, including RAS/MAPK Pathway Hyperactivation.
+3. `kg_get_treatment_evidence` with `{"disease_id": "MONDO:0011908", "treatment": "trametinib"}` returns trametinib, the mechanism it inhibits, and the phase II trial text (PMID:38867349) in `evidence`. `limitations` says no molecular target is recorded and the trial result is text only.
 
 ## Example: what leads to hypercalcemia?
 

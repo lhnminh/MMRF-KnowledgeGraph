@@ -650,8 +650,474 @@ resource "aws_bedrockagentcore_gateway_target" "kg_graph" {
           }
 
           inline_payload {
+            name        = "kg_get_gene_context"
+            description = "Everything the graph records about one human gene, per source: Monarch gene-disease associations, DisMech genetic factors and the disease subtypes the gene defines. States none recorded for each loaded source with no record, and that Open Targets and CIViC are not loaded."
+
+            input_schema {
+              type = "object"
+
+              property {
+                name        = "gene"
+                type        = "string"
+                description = "Human gene as an HGNC id (e.g. HGNC:6407) or approved symbol (e.g. KRAS)"
+                required    = true
+              }
+
+              property {
+                name        = "limit"
+                type        = "integer"
+                description = "Maximum edges to return, 1-200 (default 50)"
+              }
+            }
+
+            output_schema {
+              type        = "object"
+              description = "AD-004 envelope (contract_version 0.2): observations are recorded facts, interpretation is added explanation, limitations state what the answer can't support."
+
+              property {
+                name     = "contract_version"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "result_type"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "summary"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name        = "observations"
+                type        = "array"
+                description = "What a source record states, each with a refs array of evidence ids."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "interpretation"
+                type        = "array"
+                description = "Curator explanation, not an established fact. Each item carries basis and refs."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name     = "graph"
+                type     = "object"
+                required = true
+
+                property {
+                  name       = "nodes"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "edges"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+
+              property {
+                name        = "evidence"
+                type        = "array"
+                description = "Flat lookup table of citations; observations/interpretation refs point into this by id."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "query"
+                type        = "object"
+                description = "The openCypher query that ran, present when one did."
+
+                property {
+                  name = "language"
+                  type = "string"
+                }
+
+                property {
+                  name = "text"
+                  type = "string"
+                }
+
+                property {
+                  name = "parameters"
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "limitations"
+                type        = "array"
+                description = "What the answer can't support. Always pass these on."
+                required    = true
+
+                items {
+                  type = "string"
+                }
+              }
+
+              property {
+                name     = "trace"
+                type     = "object"
+                required = true
+
+                property {
+                  name = "request_id"
+                  type = "string"
+                }
+
+                property {
+                  name       = "plan"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "tool_calls"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+            }
+          }
+
+          inline_payload {
+            name        = "kg_get_gene_disease_association"
+            description = "The recorded link between one gene and one disease, from each source: the Monarch gene-disease association (relationship, knowledge source, disease id), the DisMech genetic factor and the disease subtype the gene defines. If a variant is named and only a gene-level record exists, states the change in specificity. Use the disease id returned here to continue into the DisMech disease record."
+
+            input_schema {
+              type = "object"
+
+              property {
+                name        = "gene"
+                type        = "string"
+                description = "Human gene as an HGNC id (e.g. HGNC:6407) or approved symbol (e.g. KRAS)"
+                required    = true
+              }
+
+              property {
+                name        = "disease_id"
+                type        = "string"
+                description = "MONDO identifier of the disease, e.g. MONDO:0011908"
+                required    = true
+              }
+
+              property {
+                name        = "variant"
+                type        = "string"
+                description = "Optional variant the user asked about, e.g. KRAS G12D. Used only to report whether the graph has anything at that specificity."
+              }
+            }
+
+            output_schema {
+              type        = "object"
+              description = "AD-004 envelope (contract_version 0.2): observations are recorded facts, interpretation is added explanation, limitations state what the answer can't support."
+
+              property {
+                name     = "contract_version"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "result_type"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "summary"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name        = "observations"
+                type        = "array"
+                description = "What a source record states, each with a refs array of evidence ids."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "interpretation"
+                type        = "array"
+                description = "Curator explanation, not an established fact. Each item carries basis and refs."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name     = "graph"
+                type     = "object"
+                required = true
+
+                property {
+                  name       = "nodes"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "edges"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+
+              property {
+                name        = "evidence"
+                type        = "array"
+                description = "Flat lookup table of citations; observations/interpretation refs point into this by id."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "query"
+                type        = "object"
+                description = "The openCypher query that ran, present when one did."
+
+                property {
+                  name = "language"
+                  type = "string"
+                }
+
+                property {
+                  name = "text"
+                  type = "string"
+                }
+
+                property {
+                  name = "parameters"
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "limitations"
+                type        = "array"
+                description = "What the answer can't support. Always pass these on."
+                required    = true
+
+                items {
+                  type = "string"
+                }
+              }
+
+              property {
+                name     = "trace"
+                type     = "object"
+                required = true
+
+                property {
+                  name = "request_id"
+                  type = "string"
+                }
+
+                property {
+                  name       = "plan"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "tool_calls"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+            }
+          }
+
+          inline_payload {
+            name        = "kg_get_treatment_evidence"
+            description = "DisMech recorded treatments for a disease with their agents, the mechanism each treatment acts on (with that edge's own evidence, and the mechanism's place in the disease record) and the cited evidence text. Reports treatments with no mechanism link and agents with no recorded molecular target. Recorded knowledge, not a recommendation."
+
+            input_schema {
+              type = "object"
+
+              property {
+                name        = "disease_id"
+                type        = "string"
+                description = "MONDO identifier of the disease, e.g. MONDO:0011908"
+                required    = true
+              }
+
+              property {
+                name        = "treatment"
+                type        = "string"
+                description = "Optional: only treatments or agents whose name contains this text, e.g. trametinib"
+              }
+
+              property {
+                name        = "mechanism"
+                type        = "string"
+                description = "Optional: only treatments acting on a mechanism whose name contains this text, e.g. RAS/MAPK"
+              }
+            }
+
+            output_schema {
+              type        = "object"
+              description = "AD-004 envelope (contract_version 0.2): observations are recorded facts, interpretation is added explanation, limitations state what the answer can't support."
+
+              property {
+                name     = "contract_version"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "result_type"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name     = "summary"
+                type     = "string"
+                required = true
+              }
+
+              property {
+                name        = "observations"
+                type        = "array"
+                description = "What a source record states, each with a refs array of evidence ids."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "interpretation"
+                type        = "array"
+                description = "Curator explanation, not an established fact. Each item carries basis and refs."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name     = "graph"
+                type     = "object"
+                required = true
+
+                property {
+                  name       = "nodes"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "edges"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+
+              property {
+                name        = "evidence"
+                type        = "array"
+                description = "Flat lookup table of citations; observations/interpretation refs point into this by id."
+                required    = true
+
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "query"
+                type        = "object"
+                description = "The openCypher query that ran, present when one did."
+
+                property {
+                  name = "language"
+                  type = "string"
+                }
+
+                property {
+                  name = "text"
+                  type = "string"
+                }
+
+                property {
+                  name = "parameters"
+                  type = "object"
+                }
+              }
+
+              property {
+                name        = "limitations"
+                type        = "array"
+                description = "What the answer can't support. Always pass these on."
+                required    = true
+
+                items {
+                  type = "string"
+                }
+              }
+
+              property {
+                name     = "trace"
+                type     = "object"
+                required = true
+
+                property {
+                  name = "request_id"
+                  type = "string"
+                }
+
+                property {
+                  name       = "plan"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+
+                property {
+                  name       = "tool_calls"
+                  type       = "array"
+                  items_json = jsonencode({ type = "object" })
+                }
+              }
+            }
+          }
+
+          inline_payload {
             name        = "kg_run_readonly_query"
-            description = "Run a single read-only openCypher query when no named tool fits. Writes, CALL and unbounded variable-length paths are rejected; results are capped at 100 rows. Graph: (:Disease {id,name})-[:ASSOCIATION {predicate,source,source_version,edge_origin,primary_knowledge_source,publications}]->(:Entity or :Disease {id,label,category}); (:Disease)-[:HAS_MECHANISM]->(:Mechanism {name,description}); (:Mechanism)-[:LEADS_TO {evidence_pmid,evidence_snippet,dismech_explanation}]->(:Mechanism)."
+            description = "Run a single read-only openCypher query when no named tool fits. Writes, CALL and unbounded variable-length paths are rejected; results are capped at 100 rows. Graph: (:Disease {id,name})-[:ASSOCIATION {predicate,source,source_version,edge_origin,primary_knowledge_source,publications}]->(:Entity or :Disease {id,label,category}); (:Disease)-[:HAS_MECHANISM]->(:Mechanism {name,description}); (:Mechanism)-[:LEADS_TO {evidence_pmid,evidence_snippet,dismech_explanation}]->(:Mechanism); a Monarch gene-disease association has the gene as subject: (:Entity {category:'biolink:Gene'})-[:ASSOCIATION]->(:Disease); (:Entity)-[:HAS_AGENT]->(:Entity); (:Entity {subtype})-[:HAS_DRIVER_GENE]->(:Entity {gene}); (:Entity {treatment})-[:TARGETS_MECHANISM {treatment_effect,evidence_pmid,evidence_snippet}]->(:Mechanism)."
 
             input_schema {
               type = "object"
