@@ -130,11 +130,11 @@ data "archive_file" "api" {
   excludes    = ["__pycache__", "__pycache__/**"]
 }
 
-#checkov:skip=CKV_AWS_117:Sandbox viewer Lambda only calls other Lambdas and SSM via AWS APIs; VPC placement would need NAT setup with no security benefit here
-#checkov:skip=CKV_AWS_115:No reserved concurrency set; low-traffic sandbox endpoint, shared account concurrency pool is sufficient
-#checkov:skip=CKV_AWS_116:No DLQ; synchronous API Gateway invocation has no retry/async failure path for a DLQ to catch
-#checkov:skip=CKV_AWS_272:Code-signing not configured; sandbox deployment, no code-signing pipeline exists yet
 resource "aws_lambda_function" "api" {
+  #checkov:skip=CKV_AWS_117:Sandbox viewer Lambda only calls other Lambdas and SSM via AWS APIs; VPC placement would need NAT setup with no security benefit here
+  #checkov:skip=CKV_AWS_115:No reserved concurrency set; low-traffic sandbox endpoint, shared account concurrency pool is sufficient
+  #checkov:skip=CKV_AWS_116:No DLQ; synchronous API Gateway invocation has no retry/async failure path for a DLQ to catch
+  #checkov:skip=CKV_AWS_272:Code-signing not configured; sandbox deployment, no code-signing pipeline exists yet
   function_name    = var.name
   role             = aws_iam_role.api.arn
   runtime          = "python3.12"
