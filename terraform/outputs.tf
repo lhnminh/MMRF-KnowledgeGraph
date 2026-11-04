@@ -13,3 +13,7 @@ output "ingest_bucket" {
 output "ingest_function" {
   value = aws_lambda_function.ingest.function_name
 }
+
+output "gateway_url" {
+  value = aws_bedrockagentcore_gateway.kg.gateway_url
+}

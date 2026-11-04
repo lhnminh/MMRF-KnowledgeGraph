@@ -132,6 +132,16 @@ Neptune negotiates Bolt protocol 3, which allows only one open result per transa
 
 Open Targets and CIViC are not loaded into Neptune yet. The ETL above can export them, but they total about 12 MB, so when they are needed, revisit whether row-by-row writes are enough or the Neptune bulk loader is the better fit.
 
+### Test the Gateway
+
+`scripts/test_gateway.py` SigV4-signs the same `initialize` → `tools/list` → `tools/call` MCP sequence another team's agent would send, so it checks the Gateway itself rather than invoking the Lambda directly:
+
+```sh
+uv run python scripts/test_gateway.py
+```
+
+Needs credentials for an identity the Gateway's AWS_IAM authorizer accepts. It reads the Gateway URL from `terraform -chdir=terraform output -raw gateway_url` by default, or pass `--gateway-url` to override.
+
 ## Tests
 
 ```sh
