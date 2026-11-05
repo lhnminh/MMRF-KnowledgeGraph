@@ -1,9 +1,10 @@
 # Well-Architected Review: Workstream 1 Knowledge Graph
 
-Date: 2026-11-04. Scope: `terraform/` and `ingestion/load_neo4j.py` as deployed today (one
-Neptune cluster, two Lambdas, AgentCore Gateway). Findings below are grouped by Well-Architected
-pillar, worst first in each pillar. "Fixed" items were applied directly to Terraform; everything
-else is open.
+Date: 2026-11-04, re-verified 2026-11-04. Scope: `terraform/` and `ingestion/load_neo4j.py` as
+deployed today (one Neptune cluster, two Lambdas, AgentCore Gateway). Findings below are grouped
+by Well-Architected pillar, worst first in each pillar. "Fixed" items were applied directly to
+Terraform; everything else is open. All six pillars are covered, including Sustainability, added
+in the re-verification pass below.
 
 ## Security
 
@@ -62,12 +63,21 @@ else is open.
   `aws_neptune_cluster_instance` despite two private subnets across two AZs. An instance or AZ fault
   is a full outage with no recovery path; a `terraform apply` that forces replacement still destroys
   all data.
-- **Open — no DLQ, retry, or alarms on either Lambda.** No `on_failure` destination, no CloudWatch
-  alarms on Lambda errors, Neptune CPU/storage, or Gateway errors.
-- **Open — ingest loader has no batching or backoff.** `ingestion/load_neo4j.py` issues one
-  round-trip per node/edge with a 300s / 256MB Lambda. Fine at the current ~50-node scale; at 15x
-  data volume (Open Targets + CIViC) this risks Lambda timeout or Neptune throttling with no retry
-  to recover from a partial load.
+- **Fixed (since initial pass) — Lambda error alarms added.** `terraform/alarms.tf` adds
+  `aws_cloudwatch_metric_alarm.lambda_errors` on both functions' `AWS/Lambda` Errors metric, plus a
+  metric-filter alarm (`kg_tool_errors`) that catches `kg-graph` query failures the handler itself
+  swallows and returns to the agent as a normal (non-erroring) response. Both alarm to an SNS topic
+  with optional email subscription.
+- **Open — still no DLQ or `on_failure` destination on either Lambda.** A crash during
+  `kg-ingest`'s write path or `kg-graph`'s invocation has no dead-letter capture; the only record is
+  whatever CloudWatch Logs/the alarm above caught before the function exited.
+- **Fixed (since initial pass) — ingest loader now retries transient write failures.**
+  `ingestion/load_neo4j.py`'s `_execute_write_with_retry` wraps `execute_write` with 3 attempts and
+  linear backoff, safe because every write is a `MERGE`.
+- **Open — ingest loader still has no batching.** Writes remain one `tx.run` round-trip per
+  node/edge inside `load_monarch`/`load_dismech`, not a batched `UNWIND`. Fine at the current
+  ~50-node scale; at 15x data volume (Open Targets + CIViC) this is still the actual throughput
+  limit, independent of the retry logic above — retries make a slow load resilient, not fast.
 
 ## Performance Efficiency / Scalability
 
@@ -102,6 +112,38 @@ else is open.
   warning not to change specific lines because Terraform will force-replace the Neptune cluster,
   rather than a `lifecycle { prevent_destroy = true }` block or CI plan-gating.
 
+## Sustainability
+
+- **Fixed — no NAT gateway.** No `aws_nat_gateway` or `aws_internet_gateway` resource exists
+  anywhere in `terraform/`; the private VPC reaches S3 only through a free Gateway VPC endpoint
+  (`terraform/ingest.tf`, `aws_vpc_endpoint.s3`). A NAT instance running 24/7 for this workload's
+  low, bursty traffic would be pure idle draw; this design avoids that entirely, not just its cost.
+- **Fixed — compute is already sized to the actual workload, not provisioned for headroom.** Both
+  Lambdas run at 256MB (`terraform/ingest.tf`, `terraform/loader_lambda.tf`) against a ~50-2,000
+  node graph, and Neptune Serverless (not a fixed-size instance class) scales within `min_capacity
+  = 1` / a small max (`terraform/main.tf`). This matches the pillar's "match provisioning to
+  demand" guidance directly.
+- **Open — Neptune Serverless floor runs 24/7 regardless of query volume.** `min_capacity = 1`
+  (`terraform/main.tf`) keeps at least one NCU warm at all times with no scheduled scale-to-zero or
+  stop/start. For a hackathon-scale graph queried only during demos, most of that capacity-hours is
+  idle. This is the same resource already flagged as a cost gap above — at this scale it is
+  simultaneously the largest sustainability gap, since idle compute is wasted energy, not just
+  wasted spend.
+- **Open — S3 ingest bucket has no lifecycle rule for current objects, only noncurrent versions.**
+  `aws_s3_bucket_lifecycle_configuration.ingest` (`terraform/ingest.tf`) expires noncurrent
+  versions after 30 days, but the current raw source copies persist indefinitely with no
+  transition to Infrequent Access/Glacier or expiration — despite the bucket's own comment noting
+  these files are regenerable from the fetch scripts and need not be retained at all.
+- **Fixed — log retention is bounded, avoiding unbounded storage growth.** All CloudWatch log
+  groups (`kg-graph`, `kg-ingest`, Gateway, Neptune audit) are set to `retention_in_days = 14`
+  rather than the unmanaged, non-expiring default. Called out under Cost above; it is equally a
+  sustainability control, since it caps the storage (and thus embodied energy) this workload
+  accumulates over time.
+- **Open — region choice has no documented sustainability rationale.** `terraform/variables.tf`
+  defaults to `us-west-2`, constrained to `us-east-1`/`us-west-2` for hackathon service-availability
+  reasons only. AWS publishes per-region carbon-intensity data; low-impact for a 2-day sandbox, but
+  worth a one-line note if this moves toward a longer-lived deployment.
+
 ## Summary of changes made in this pass
 
 | File | Change |
@@ -110,6 +152,13 @@ else is open.
 | `scripts/teardown.sh` | Disable Neptune deletion protection before `terraform destroy` |
 | `terraform/ingest.tf` | Added S3 SSE (AES256) and public access block on the ingest bucket; added a 14-day-retention log group for `kg-ingest` |
 | `terraform/loader_lambda.tf` | Added a 14-day-retention log group for `kg-graph` |
+
+This table reflects only the original pass. Since then, two more items from this doc were
+independently fixed and are reflected above where relevant: `terraform/alarms.tf` added the
+Lambda error and `kg-graph` tool-error alarms (Reliability), and `ingestion/load_neo4j.py` added
+retry-with-backoff around each write (Reliability). This re-verification pass (2026-11-04) made
+no further Terraform or code changes — it only confirmed the claims above against current source
+and added the Sustainability pillar, which was missing from the original review.
 
 All changes in this pass are additive or remove an unused rule — none force Neptune or either
 Lambda to be replaced. `terraform validate` and `terraform fmt` pass. **Not independently verified
